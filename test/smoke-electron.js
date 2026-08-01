@@ -174,6 +174,13 @@ app.whenReady().then(async () => {
     rootResults.modeAfter = document.getElementById('btn-mode').textContent;
     rootResults.markdownModeHeading = await commandResult('段落', '2 级标题');
 
+    const workspace = document.getElementById('workspace');
+    rootResults.sidebarBefore = workspace.classList.contains('sidebar-collapsed');
+    document.getElementById('btn-sidebar').click();
+    rootResults.sidebarAfter = workspace.classList.contains('sidebar-collapsed');
+    rootResults.sidebarExpanded = document.getElementById('btn-sidebar').getAttribute('aria-expanded');
+    document.getElementById('btn-sidebar').click();
+
     const assetUrls = Array.from(document.querySelectorAll('link[href]'), (link) => link.href);
     document.getElementById('document-base').href = 'file:///C:/markdown-document/';
     const ipcResult = await window.api.saveImageBlob(
@@ -184,9 +191,10 @@ app.whenReady().then(async () => {
 
     return {
       editorReady: Boolean(window.editor),
-      apiReady: Boolean(window.api && window.api.openFile),
+      apiReady: Boolean(window.api && window.api.openFile && window.api.listDirectoryForDocument),
       title: document.title,
       hasToolbar: Boolean(document.querySelector('.toastui-editor-defaultUI-toolbar')),
+      hasSidebar: Boolean(document.getElementById('file-sidebar') && document.getElementById('file-tree')),
       assetsPinned: assetUrls.every((url, index) => document.querySelectorAll('link[href]')[index].href === url),
       arrayBufferIpc: ipcResult.isArrayBuffer && ipcResult.byteLength === 3,
       commandResults,
@@ -199,7 +207,7 @@ app.whenReady().then(async () => {
     throw new Error(`Renderer script failed: ${error.message}; console: ${pageErrors.join(' | ')}`);
   }
 
-  if (!state.editorReady || !state.apiReady || !state.hasToolbar || !state.assetsPinned || !state.arrayBufferIpc) {
+  if (!state.editorReady || !state.apiReady || !state.hasToolbar || !state.hasSidebar || !state.assetsPinned || !state.arrayBufferIpc) {
     finish(new Error(`Renderer did not initialize: ${JSON.stringify(state)}`));
     return;
   }
@@ -252,6 +260,8 @@ app.whenReady().then(async () => {
     root.findCount !== '1/2' ||
     root.replaced !== '查找 beta，再次 beta' ||
     root.modeBefore === root.modeAfter ||
+    root.sidebarBefore === root.sidebarAfter ||
+    root.sidebarExpanded !== String(root.sidebarBefore) ||
     !/^## 内容/m.test(root.markdownModeHeading)
   ) {
     finish(new Error(`Context menu clipboard regression: ${JSON.stringify(root)}`));

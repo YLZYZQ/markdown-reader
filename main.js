@@ -12,6 +12,7 @@ const {
   pathKey,
   sanitizeImageFileName
 } = require('./lib/file-utils');
+const { listDocumentTree } = require('./lib/file-tree');
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const authorizedDocumentPaths = new Set();
@@ -218,6 +219,16 @@ ipcMain.handle('file:openPath', async (event, filePath) => {
   }
 });
 
+ipcMain.handle('directory:listForDocument', async (event, filePath) => {
+  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  try {
+    const documentPath = assertAuthorizedDocument(filePath);
+    return await listDocumentTree(documentPath);
+  } catch (error) {
+    return errorResult(error);
+  }
+});
+
 ipcMain.handle('file:save', async (event, filePath, content) => {
   if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
   if (typeof content !== 'string') return errorResult('文档内容无效');
@@ -368,6 +379,8 @@ function buildMenu() {
     {
       label: '视图',
       submenu: [
+        { label: '显示/隐藏文件侧边栏', accelerator: 'CmdOrCtrl+Shift+E', click: () => sendCommand('toggleSidebar') },
+        { type: 'separator' },
         { label: '切换源码/所见即所得', accelerator: 'CmdOrCtrl+/', click: () => sendCommand('toggleMode') },
         { type: 'separator' },
         { label: '切换主题', accelerator: 'CmdOrCtrl+Shift+T', click: () => mainWindow?.webContents.send('menu:toggleTheme') },

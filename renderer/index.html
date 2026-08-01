@@ -27,6 +27,7 @@
   <!-- 顶部工具条 -->
   <header class="titlebar">
     <div class="title-left">
+      <button id="btn-sidebar" class="tb-btn icon-btn sidebar-toggle" title="显示/隐藏文件侧边栏 (Ctrl+Shift+E)" aria-label="显示或隐藏文件侧边栏" aria-expanded="true">☰</button>
       <span class="file-icon" aria-hidden="true">📄</span>
       <span id="filename" class="filename">未命名.md</span>
     </div>
@@ -43,8 +44,22 @@
     </div>
   </header>
 
-  <!-- 编辑器容器 -->
-  <div id="editor"></div>
+  <!-- 文件侧边栏与编辑器 -->
+  <main id="workspace" class="workspace">
+    <aside id="file-sidebar" class="file-sidebar" aria-label="当前文档目录">
+      <div class="sidebar-header">
+        <div class="sidebar-heading">
+          <span class="sidebar-title">文件</span>
+          <span id="sidebar-root" class="sidebar-root" title="尚未打开文档">尚未打开文档</span>
+        </div>
+        <button id="btn-sidebar-refresh" class="sidebar-action" title="刷新目录" aria-label="刷新目录">↻</button>
+      </div>
+      <div id="file-tree" class="file-tree">
+        <div class="sidebar-empty">打开或保存文档后，将显示同目录下的文件。</div>
+      </div>
+    </aside>
+    <div id="editor"></div>
+  </main>
 
   <!-- 查找与替换面板 -->
   <section id="find-panel" class="find-panel" aria-label="查找与替换" hidden>

@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   // 文件操作
   openFile: () => ipcRenderer.invoke('file:open'),
   openPath: (filePath) => ipcRenderer.invoke('file:openPath', filePath),
+  listDirectoryForDocument: (filePath) =>
+    ipcRenderer.invoke('directory:listForDocument', filePath),
   saveFile: (filePath, content) => ipcRenderer.invoke('file:save', filePath, content),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   confirmReplace: () => ipcRenderer.invoke('document:confirmReplace'),

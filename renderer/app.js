@@ -46,6 +46,11 @@ const findInputEl = document.getElementById('find-input');
 const replaceInputEl = document.getElementById('replace-input');
 const findCountEl = document.getElementById('find-count');
 const caseSensitiveEl = document.getElementById('find-case-sensitive');
+const workspaceEl = document.getElementById('workspace');
+const fileTreeEl = document.getElementById('file-tree');
+const sidebarRootEl = document.getElementById('sidebar-root');
+const sidebarButtonEl = document.getElementById('btn-sidebar');
+const sidebarRefreshButtonEl = document.getElementById('btn-sidebar-refresh');
 
 // 后续会把 <base> 指向当前文档目录；先固定应用自身样式资源的绝对地址。
 document.querySelectorAll('link[href]').forEach((link) => link.setAttribute('href', link.href));
@@ -61,6 +66,13 @@ let followsSystemTheme = true;
 let currentEditMode = 'wysiwyg';
 let currentFindMatch = -1;
 let lastFindSignature = '';
+let fileTreeRequestId = 0;
+let sidebarCollapsed = false;
+try {
+  sidebarCollapsed = localStorage.getItem('md-reader.sidebarCollapsed') === 'true';
+} catch (error) {
+  console.warn('无法读取侧边栏状态:', error);
+}
 
 // Toast UI Editor 实例（UMD 全局）
 const Editor = toastui.Editor;
@@ -182,6 +194,138 @@ function baseName(p) {
   return p.replace(/\\/g, '/').split('/').pop();
 }
 
+function comparablePath(filePath) {
+  return String(filePath || '').replace(/\\/g, '/').toLocaleLowerCase();
+}
+
+function setSidebarCollapsed(collapsed, persist = true) {
+  sidebarCollapsed = Boolean(collapsed);
+  workspaceEl.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+  sidebarButtonEl.setAttribute('aria-expanded', String(!sidebarCollapsed));
+  sidebarButtonEl.title = `${sidebarCollapsed ? '显示' : '隐藏'}文件侧边栏 (Ctrl+Shift+E)`;
+  if (persist) {
+    try {
+      localStorage.setItem('md-reader.sidebarCollapsed', String(sidebarCollapsed));
+    } catch (error) {
+      console.warn('无法保存侧边栏状态:', error);
+    }
+  }
+}
+
+function clearFileTree(message = '打开或保存文档后，将显示同目录下的文件。') {
+  fileTreeEl.replaceChildren();
+  const empty = document.createElement('div');
+  empty.className = 'sidebar-empty';
+  empty.textContent = message;
+  fileTreeEl.appendChild(empty);
+  sidebarRootEl.textContent = '尚未打开文档';
+  sidebarRootEl.title = '尚未打开文档';
+}
+
+function treeEntryContainsPath(entry, targetPath) {
+  if (entry.type === 'file') return comparablePath(entry.path) === targetPath;
+  return entry.children.some((child) => treeEntryContainsPath(child, targetPath));
+}
+
+function createTreeEntry(entry, activePath) {
+  if (entry.type === 'directory') {
+    const details = document.createElement('details');
+    details.className = 'tree-directory';
+    details.open = entry.children.some((child) => treeEntryContainsPath(child, activePath));
+
+    const summary = document.createElement('summary');
+    summary.title = entry.path;
+    const icon = document.createElement('span');
+    icon.className = 'tree-icon';
+    icon.textContent = '📁';
+    const name = document.createElement('span');
+    name.className = 'tree-name';
+    name.textContent = entry.name;
+    summary.append(icon, name);
+    details.appendChild(summary);
+
+    const children = document.createElement('div');
+    children.className = 'tree-children';
+    entry.children.forEach((child) => children.appendChild(createTreeEntry(child, activePath)));
+    details.appendChild(children);
+    return details;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'tree-file';
+  button.classList.toggle('active', comparablePath(entry.path) === activePath);
+  button.title = entry.path;
+  button.dataset.filePath = entry.path;
+
+  const icon = document.createElement('span');
+  icon.className = 'tree-icon';
+  icon.textContent = '📄';
+  const name = document.createElement('span');
+  name.className = 'tree-name';
+  name.textContent = entry.name;
+  button.append(icon, name);
+  button.addEventListener('click', () => void openDocumentFromSidebar(entry.path));
+  return button;
+}
+
+async function refreshFileTree(filePath = currentFilePath) {
+  if (!filePath) {
+    fileTreeRequestId += 1;
+    clearFileTree();
+    return;
+  }
+
+  const requestId = ++fileTreeRequestId;
+  sidebarRefreshButtonEl.classList.add('loading');
+  try {
+    const result = await window.api.listDirectoryForDocument(filePath);
+    if (requestId !== fileTreeRequestId) return;
+    if (result.error) {
+      clearFileTree('无法读取当前文档目录：' + result.error);
+      return;
+    }
+
+    sidebarRootEl.textContent = result.rootName;
+    sidebarRootEl.title = result.rootPath;
+    fileTreeEl.replaceChildren();
+    const activePath = comparablePath(currentFilePath);
+    result.entries.forEach((entry) => fileTreeEl.appendChild(createTreeEntry(entry, activePath)));
+
+    if (result.entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'sidebar-empty';
+      empty.textContent = '当前目录下没有 Markdown 或文本文件。';
+      fileTreeEl.appendChild(empty);
+    } else if (result.truncated) {
+      const notice = document.createElement('div');
+      notice.className = 'sidebar-empty';
+      notice.textContent = '目录内容较多，已限制显示范围。';
+      fileTreeEl.appendChild(notice);
+    }
+  } catch (error) {
+    if (requestId === fileTreeRequestId) clearFileTree('无法读取当前文档目录：' + error.message);
+  } finally {
+    if (requestId === fileTreeRequestId) sidebarRefreshButtonEl.classList.remove('loading');
+  }
+}
+
+async function openDocumentFromSidebar(filePath) {
+  if (comparablePath(filePath) === comparablePath(currentFilePath)) return;
+  if (!(await confirmBeforeReplace())) return;
+  try {
+    const result = await window.api.openPath(filePath);
+    if (result.error) {
+      toast('打开失败: ' + result.error);
+      void refreshFileTree();
+      return;
+    }
+    loadContent(result.filePath, result.content, result.baseUrl);
+  } catch (error) {
+    toast('打开失败: ' + error.message);
+  }
+}
+
 function setStatus(text) {
   statusInfoEl.textContent = text;
 }
@@ -221,8 +365,10 @@ async function confirmBeforeReplace() {
 async function newDocument() {
   if (!(await confirmBeforeReplace())) return false;
   currentFilePath = null;
+  fileTreeRequestId += 1;
   lastSavedContent = '';
   setDocumentBase(null);
+  clearFileTree();
   editor.setMarkdown('', false);
   findPanelEl.hidden = true;
   setDirty(false);
@@ -255,6 +401,7 @@ function loadContent(filePath, content, baseUrl) {
   setDirty(false);
   setStatus('已打开: ' + baseName(filePath));
   toast('已打开 ' + baseName(filePath));
+  void refreshFileTree(filePath);
 }
 
 async function saveFile(saveAs = false) {
@@ -271,6 +418,7 @@ async function saveFile(saveAs = false) {
     updateTitle();
     setStatus('已保存到: ' + baseName(currentFilePath));
     toast('已保存');
+    void refreshFileTree(currentFilePath);
     return true;
   } catch (error) {
     toast('保存失败: ' + error.message);
@@ -457,6 +605,8 @@ function hasFiles(e) {
 document.getElementById('btn-new').addEventListener('click', () => newDocument());
 document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
+sidebarButtonEl.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
+sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree());
 document.getElementById('btn-find').addEventListener('click', () => showFindPanel(false));
 modeButtonEl.addEventListener('click', toggleEditMode);
 document.getElementById('btn-theme').addEventListener('click', toggleTheme);
@@ -504,6 +654,7 @@ function handleEditorCommand(name, payload = {}) {
         else findInEditor(true);
         break;
       case 'toggleMode': toggleEditMode(); break;
+      case 'toggleSidebar': setSidebarCollapsed(!sidebarCollapsed); break;
       case 'popup': openToolbarPopup(payload.name); break;
       case 'dateTime': editor.insertText('\n' + nowString() + '\n'); break;
       default: editor.exec(name, payload); break;
@@ -714,6 +865,7 @@ async function init() {
   document.body.classList.toggle('theme-dark', currentTheme === 'dark');
   document.body.classList.toggle('theme-light', currentTheme === 'light');
   themeIconEl.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+  setSidebarCollapsed(sidebarCollapsed, false);
 
   editor = createEditor(WELCOME);
   window.editor = editor;

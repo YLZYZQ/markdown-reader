@@ -2,6 +2,7 @@
 :root {
   --tb-h: 44px;
   --sb-h: 26px;
+  --sidebar-w: 252px;
 }
 
 /* 亮色主题 */
@@ -117,13 +118,139 @@ body {
 .tb-btn:active { transform: scale(0.96); }
 .icon-btn { width: 34px; padding: 0; }
 .mode-btn { min-width: 52px; padding: 0 10px; }
+.sidebar-toggle { -webkit-app-region: no-drag; font-size: 17px; }
 
 /* ============ 编辑器区域 ============ */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
 #editor {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   position: relative;
 }
+
+/* ============ 文件侧边栏 ============ */
+.file-sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--titlebar-bg);
+  border-right: 1px solid var(--titlebar-border);
+  transition: width 0.18s ease, flex-basis 0.18s ease, border-color 0.18s ease;
+}
+.workspace.sidebar-collapsed .file-sidebar {
+  width: 0;
+  flex-basis: 0;
+  border-right-color: transparent;
+}
+.sidebar-header {
+  min-width: var(--sidebar-w);
+  min-height: 52px;
+  padding: 8px 8px 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--titlebar-border);
+}
+.sidebar-heading { min-width: 0; flex: 1; }
+.sidebar-title {
+  display: block;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.sidebar-root {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-action {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 17px;
+}
+.sidebar-action:hover { background: var(--btn-bg-hover); color: var(--fg); }
+.sidebar-action.loading { animation: sidebar-spin 0.8s linear infinite; }
+@keyframes sidebar-spin { to { transform: rotate(360deg); } }
+.file-tree {
+  min-width: var(--sidebar-w);
+  flex: 1;
+  overflow: auto;
+  padding: 7px 5px 12px;
+  user-select: none;
+}
+.sidebar-empty {
+  padding: 12px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.tree-directory { margin: 0; }
+.tree-directory > summary,
+.tree-file {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+}
+.tree-directory > summary {
+  list-style: none;
+  color: var(--muted);
+}
+.tree-directory > summary::-webkit-details-marker { display: none; }
+.tree-directory > summary::before {
+  content: "›";
+  width: 10px;
+  flex: 0 0 10px;
+  font-size: 15px;
+  transform: rotate(0deg);
+  transition: transform 0.12s ease;
+}
+.tree-directory[open] > summary::before { transform: rotate(90deg); }
+.tree-directory > summary:hover,
+.tree-file:hover { background: var(--btn-bg-hover); color: var(--fg); }
+.tree-children {
+  margin-left: 10px;
+  padding-left: 5px;
+  border-left: 1px solid color-mix(in srgb, var(--titlebar-border) 72%, transparent);
+}
+.tree-file.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.tree-icon { flex: 0 0 15px; width: 15px; text-align: center; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; }
 
 /* ============ Toast UI Editor 适配 ============ */
 #editor { height: 100%; }
