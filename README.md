@@ -33,13 +33,15 @@ npm run test:smoke
 npm run dist:installer
 ```
 
-构建免安装版本：
+构建 ZIP 目录免安装版本：
 
 ```powershell
 npm run dist:portable
 ```
 
 产物位于 `release/`。
+
+免安装版解压后直接运行 `MarkdownReader.exe`，程序数据保存在同目录的 `data/` 中。为了尽量保留上游 Electron 可执行文件的云信誉，免安装构建不会修改可执行文件资源；因此文件图标保持 Electron 默认样式。
 
 > 当前发布包未使用商业代码签名证书，Windows 首次运行时可能显示 SmartScreen 提示。
 

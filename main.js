@@ -21,8 +21,13 @@ let isDocumentDirty = false;
 let allowWindowClose = false;
 let closePromptOpen = false;
 
-if (process.env.PORTABLE_EXECUTABLE_DIR) {
-  app.setPath('userData', path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'data'));
+const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR ||
+  (fs.existsSync(path.join(path.dirname(process.execPath), 'portable-mode'))
+    ? path.dirname(process.execPath)
+    : null);
+
+if (portableExecutableDir) {
+  app.setPath('userData', path.join(portableExecutableDir, 'data'));
 }
 
 function isCurrentRenderer(event) {
