@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self';
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' file: data: blob: https:;
+                 media-src 'self' file: data: blob:;
+                 font-src 'self' data:;
+                 connect-src 'none';
+                 object-src 'none';
+                 base-uri 'self' file:;
+                 form-action 'none';" />
+  <base id="document-base" href="./" />
+  <title>Markdown阅读器</title>
+  <!-- Toast UI Editor 离线资源（esbuild 打包的单文件 bundle + CSS） -->
+  <link rel="stylesheet" href="tui-editor/toastui-editor.css" />
+  <link rel="stylesheet" href="tui-editor/toastui-editor-dark.css" />
+  <link rel="stylesheet" href="tui-editor/toastui-editor-plugin-code-syntax-highlight.css" />
+  <link rel="stylesheet" href="tui-editor/prism.css" />
+  <script src="tui-editor/editor-bundle.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="theme-light">
+  <!-- 顶部工具条 -->
+  <header class="titlebar">
+    <div class="title-left">
+      <span class="file-icon" aria-hidden="true">📄</span>
+      <span id="filename" class="filename">未命名.md</span>
+    </div>
+    <div class="title-right">
+      <button id="btn-new" class="tb-btn" title="新建 (Ctrl+N)">新建</button>
+      <button id="btn-open" class="tb-btn" title="打开 (Ctrl+O)">打开</button>
+      <button id="btn-save" class="tb-btn" title="保存 (Ctrl+S)">保存</button>
+      <span class="tb-separator" aria-hidden="true"></span>
+      <button id="btn-find" class="tb-btn icon-btn" title="查找 (Ctrl+F)" aria-label="查找">⌕</button>
+      <button id="btn-mode" class="tb-btn mode-btn" title="切换源码模式 (Ctrl+/)">源码</button>
+      <button id="btn-theme" class="tb-btn icon-btn" title="切换主题 (Ctrl+Shift+T)">
+        <span id="theme-icon">🌙</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 编辑器容器 -->
+  <div id="editor"></div>
+
+  <!-- 查找与替换面板 -->
+  <section id="find-panel" class="find-panel" aria-label="查找与替换" hidden>
+    <div class="find-row">
+      <button id="btn-find-expand" class="find-icon-btn" title="展开替换" aria-label="展开替换">⌄</button>
+      <input id="find-input" type="text" autocomplete="off" placeholder="查找" aria-label="查找内容" />
+      <span id="find-count" class="find-count">0 处</span>
+      <button id="btn-find-prev" class="find-icon-btn" title="上一个 (Shift+Enter)" aria-label="上一个">↑</button>
+      <button id="btn-find-next" class="find-icon-btn" title="下一个 (Enter/F3)" aria-label="下一个">↓</button>
+      <button id="btn-find-close" class="find-icon-btn" title="关闭 (Esc)" aria-label="关闭">×</button>
+    </div>
+    <div class="find-row replace-row">
+      <span class="find-indent" aria-hidden="true"></span>
+      <input id="replace-input" type="text" autocomplete="off" placeholder="替换为" aria-label="替换内容" />
+      <label class="case-option"><input id="find-case-sensitive" type="checkbox" /> 区分大小写</label>
+      <button id="btn-replace" class="find-action-btn">替换</button>
+      <button id="btn-replace-all" class="find-action-btn">全部替换</button>
+    </div>
+  </section>
+
+  <!-- 底部状态栏 -->
+  <footer class="statusbar">
+    <span id="status-info">就绪</span>
+    <span id="word-count" class="word-count">0 字</span>
+  </footer>
+
+  <!-- 拖拽遮罩 -->
+  <div id="drop-overlay" class="drop-overlay">
+    <div class="drop-inner">
+      <div class="drop-icon">📁</div>
+      <div>松开以打开 Markdown 文件</div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

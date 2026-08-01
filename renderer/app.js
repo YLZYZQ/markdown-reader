@@ -1,0 +1,725 @@
+// 渲染进程：基于 Toast UI Editor 的 Markdown 编辑器
+'use strict';
+
+const WELCOME = `# 欢迎使用 Markdown 阅读器 📝
+
+一个像 **Typora** 的 Markdown 编辑器，支持**实时渲染**。
+
+## 快速开始
+
+- 按 \`Ctrl + O\` 或点击右上角「打开」打开 .md 文件
+- 直接把 .md 文件**拖拽**到窗口
+- \`Ctrl + S\` 保存，\`Ctrl + Shift + S\` 另存为
+- \`Ctrl + Shift + T\` 切换亮/暗主题
+
+## 代码块
+
+输入 \`\`\` 后回车创建代码块，可在开头写语言名获得语法高亮：
+
+\`\`\`javascript
+function greet(name) {
+  return \`Hello, \${name}!\`;
+}
+\`\`\`
+
+## 表格
+
+| 功能     | 支持 |
+| -------- | ---- |
+| 实时渲染 | ✅   |
+| 代码高亮 | ✅   |
+| 暗色模式 | ✅   |
+
+开始你的写作吧！
+`;
+
+// ============ DOM ============
+const filenameEl = document.getElementById('filename');
+const statusInfoEl = document.getElementById('status-info');
+const wordCountEl = document.getElementById('word-count');
+const themeIconEl = document.getElementById('theme-icon');
+const dropOverlay = document.getElementById('drop-overlay');
+const documentBaseEl = document.getElementById('document-base');
+const modeButtonEl = document.getElementById('btn-mode');
+const findPanelEl = document.getElementById('find-panel');
+const findInputEl = document.getElementById('find-input');
+const replaceInputEl = document.getElementById('replace-input');
+const findCountEl = document.getElementById('find-count');
+const caseSensitiveEl = document.getElementById('find-case-sensitive');
+
+// 后续会把 <base> 指向当前文档目录；先固定应用自身样式资源的绝对地址。
+document.querySelectorAll('link[href]').forEach((link) => link.setAttribute('href', link.href));
+
+// ============ 状态 ============
+let editor = null;
+window.editor = null;
+let currentFilePath = null;
+let isDirty = false;
+let lastSavedContent = '';
+let currentTheme = 'light';
+let followsSystemTheme = true;
+let currentEditMode = 'wysiwyg';
+let currentFindMatch = -1;
+let lastFindSignature = '';
+
+// Toast UI Editor 实例（UMD 全局）
+const Editor = toastui.Editor;
+const codeSyntaxHighlight = window.toastuiEditorBundle.codeSyntaxHighlight;
+
+// ============ 主题 ============
+function applyTheme(theme, fromSystem = false) {
+  if (fromSystem && !followsSystemTheme) return;
+  currentTheme = theme;
+  document.body.classList.toggle('theme-dark', theme === 'dark');
+  document.body.classList.toggle('theme-light', theme === 'light');
+  themeIconEl.textContent = theme === 'dark' ? '☀️' : '🌙';
+  themeIconEl.parentElement.title =
+    `切换主题 (当前: ${theme === 'dark' ? '暗色' : '亮色'}${fromSystem ? '，跟随系统' : ''})`;
+  // Toast UI 主题：重建编辑器（官方推荐方式）
+  rebuildEditor();
+}
+
+function toggleTheme() {
+  followsSystemTheme = false;
+  applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+}
+
+function updateEditMode(mode) {
+  currentEditMode = mode === 'markdown' ? 'markdown' : 'wysiwyg';
+  const isMarkdown = currentEditMode === 'markdown';
+  modeButtonEl.textContent = isMarkdown ? '所见即所得' : '源码';
+  modeButtonEl.title = isMarkdown
+    ? '切换到所见即所得模式 (Ctrl+/)'
+    : '切换到源码模式 (Ctrl+/)';
+  setStatus(isMarkdown ? 'Markdown 源码模式' : '所见即所得模式');
+}
+
+function toggleEditMode() {
+  const nextMode = currentEditMode === 'wysiwyg' ? 'markdown' : 'wysiwyg';
+  editor.changeMode(nextMode);
+  updateEditMode(nextMode);
+}
+
+// ============ 编辑器初始化 ============
+function createEditor(initialValue) {
+  let instance = null;
+  instance = new Editor({
+    el: document.getElementById('editor'),
+    height: '100%',
+    initialEditType: currentEditMode,
+    previewStyle: 'vertical',
+    hideModeSwitch: true,            // 隐藏模式切换 tab
+    usageStatistics: false,          // ★ 关闭 GA 统计（离线必须）
+    language: 'zh-CN',               // 中文界面
+    theme: currentTheme,
+    initialValue: initialValue,
+    plugins: [codeSyntaxHighlight],  // 代码语法高亮（含全部 prism 语言）
+    toolbarItems: [
+      ['heading', 'bold', 'italic', 'strike'],
+      ['hr', 'quote'],
+      ['ul', 'ol', 'task', 'indent', 'outdent'],
+      ['table', 'image', 'link'],
+      ['code', 'codeblock'],
+    ],
+    hooks: {
+      // 图片插入：存到本地 + 相对路径
+      addImageBlobHook: async (blob, callback) => {
+        await handleImageInsert(blob, callback);
+      }
+    },
+    events: {
+      change: () => {
+        if (!instance) return;
+        const md = instance.getMarkdown();
+        updateWordCount(md);
+        setDirty(md !== lastSavedContent);
+        if (!findPanelEl.hidden) updateFindCount();
+      },
+      changeMode: (mode) => updateEditMode(mode)
+    }
+  });
+  return instance;
+}
+
+// 重建编辑器（用于切换主题）
+function rebuildEditor() {
+  if (!editor) return;
+  const md = editor.getMarkdown();
+  const scrollContainer = document.querySelector('.toastui-editor-ww-container, .toastui-editor-md-preview');
+  const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+  const wasDirty = isDirty;
+  editor.destroy();
+  editor = createEditor(md);
+  window.editor = editor;
+  setDirty(wasDirty);
+  requestAnimationFrame(() => {
+    const nextScrollContainer = document.querySelector('.toastui-editor-ww-container, .toastui-editor-md-preview');
+    if (nextScrollContainer) nextScrollContainer.scrollTop = scrollTop;
+  });
+}
+
+// ============ 状态更新 ============
+function setDirty(dirty) {
+  const nextDirty = Boolean(dirty);
+  const changed = isDirty !== nextDirty;
+  isDirty = nextDirty;
+  filenameEl.classList.toggle('dirty', dirty);
+  updateTitle();
+  if (changed) window.api.setDocumentDirty(isDirty);
+}
+
+function updateTitle() {
+  const name = currentFilePath ? baseName(currentFilePath) : '未命名.md';
+  filenameEl.textContent = name;
+  document.title = `${isDirty ? '• ' : ''}${name} - Markdown阅读器`;
+}
+
+function setDocumentBase(baseUrl) {
+  documentBaseEl.href = baseUrl || './';
+}
+
+function baseName(p) {
+  return p.replace(/\\/g, '/').split('/').pop();
+}
+
+function setStatus(text) {
+  statusInfoEl.textContent = text;
+}
+
+function updateWordCount(md) {
+  const text = (md || '').replace(/[#*`>\-_\[\]()!|=\s]/g, '');
+  wordCountEl.textContent = `${text.length} 字`;
+}
+
+let toastTimer = null;
+function toast(msg) {
+  let el = document.querySelector('.toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+}
+
+// ============ 文件操作 ============
+async function confirmBeforeReplace() {
+  if (!isDirty) return true;
+  try {
+    const choice = await window.api.confirmReplace();
+    if (choice === 'discard') return true;
+    if (choice === 'save') return saveFile(false);
+  } catch (error) {
+    toast('无法确认未保存更改: ' + error.message);
+  }
+  return false;
+}
+
+async function newDocument() {
+  if (!(await confirmBeforeReplace())) return false;
+  currentFilePath = null;
+  lastSavedContent = '';
+  setDocumentBase(null);
+  editor.setMarkdown('', false);
+  findPanelEl.hidden = true;
+  setDirty(false);
+  updateTitle();
+  updateWordCount('');
+  setStatus('已新建空白文档');
+  toast('已新建文档');
+  editor.focus();
+  return true;
+}
+
+async function openFile() {
+  try {
+    const res = await window.api.openFile();
+    if (res.canceled) return;
+    if (res.error) { toast('打开失败: ' + res.error); return; }
+    if (!(await confirmBeforeReplace())) return;
+    loadContent(res.filePath, res.content, res.baseUrl);
+  } catch (error) {
+    toast('打开失败: ' + error.message);
+  }
+}
+
+function loadContent(filePath, content, baseUrl) {
+  currentFilePath = filePath;
+  lastSavedContent = content;
+  setDocumentBase(baseUrl);
+  editor.setMarkdown(content, false);
+  findPanelEl.hidden = true;
+  setDirty(false);
+  setStatus('已打开: ' + baseName(filePath));
+  toast('已打开 ' + baseName(filePath));
+}
+
+async function saveFile(saveAs = false) {
+  try {
+    const content = editor.getMarkdown();
+    const target = saveAs ? null : currentFilePath;
+    const res = await window.api.saveFile(target, content);
+    if (res.canceled) return false;
+    if (res.error) { toast('保存失败: ' + res.error); return false; }
+    currentFilePath = res.filePath;
+    lastSavedContent = content;
+    setDocumentBase(res.baseUrl);
+    setDirty(false);
+    updateTitle();
+    setStatus('已保存到: ' + baseName(currentFilePath));
+    toast('已保存');
+    return true;
+  } catch (error) {
+    toast('保存失败: ' + error.message);
+    return false;
+  }
+}
+
+// ============ 图片插入 ============
+async function handleImageInsert(blob, callback) {
+  if (!blob) { callback(''); return; }
+  if (!currentFilePath) {
+    toast('请先保存文件，再插入图片');
+    await saveFile(false);
+    if (!currentFilePath) { callback(''); return; }
+  }
+  try {
+    // blob 转 ArrayBuffer 发给主进程
+    const arrayBuffer = await blob.arrayBuffer();
+    const extensionByType = {
+      'image/jpeg': 'jpg',
+      'image/gif': 'gif',
+      'image/bmp': 'bmp',
+      'image/webp': 'webp',
+      'image/svg+xml': 'svg'
+    };
+    const extension = extensionByType[blob.type] || 'png';
+    const hasSupportedName = typeof blob.name === 'string' &&
+      /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(blob.name);
+    const fileName = hasSupportedName ? blob.name : `image-${Date.now()}.${extension}`;
+    const res = await window.api.saveImageBlob(currentFilePath, fileName, arrayBuffer);
+    if (res.error) { toast(res.error); callback(''); return; }
+    callback(res.markdownUrl, res.alt);
+  } catch (error) {
+    toast('保存图片失败: ' + error.message);
+    callback('');
+  }
+}
+
+// ============ 查找与替换 ============
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getFindExpression() {
+  const query = findInputEl.value;
+  if (!query) return null;
+  return new RegExp(escapeRegExp(query), caseSensitiveEl.checked ? 'g' : 'gi');
+}
+
+function getFindMatches(content = editor.getMarkdown()) {
+  const expression = getFindExpression();
+  if (!expression) return [];
+  return Array.from(content.matchAll(expression), (match) => ({
+    index: match.index,
+    length: match[0].length
+  }));
+}
+
+function updateFindCount() {
+  const signature = `${caseSensitiveEl.checked ? '1' : '0'}:${findInputEl.value}`;
+  if (signature !== lastFindSignature) {
+    lastFindSignature = signature;
+    currentFindMatch = -1;
+  }
+  const count = getFindMatches().length;
+  if (currentFindMatch >= count) currentFindMatch = count - 1;
+  findCountEl.textContent = currentFindMatch >= 0 ? `${currentFindMatch + 1}/${count}` : `${count} 处`;
+  findCountEl.classList.toggle('no-result', Boolean(findInputEl.value) && count === 0);
+  return count;
+}
+
+function showFindPanel(replaceMode = false) {
+  findPanelEl.hidden = false;
+  if (replaceMode) findPanelEl.classList.add('replace-mode');
+  updateFindCount();
+  requestAnimationFrame(() => {
+    findInputEl.focus();
+    findInputEl.select();
+  });
+}
+
+function closeFindPanel() {
+  findPanelEl.hidden = true;
+  editor.focus();
+}
+
+function findInEditor(backwards = false) {
+  const query = findInputEl.value;
+  if (!query) {
+    showFindPanel();
+    return false;
+  }
+  const count = updateFindCount();
+  if (count === 0) {
+    toast('未找到匹配内容');
+    return false;
+  }
+  currentFindMatch = backwards
+    ? (currentFindMatch <= 0 ? count - 1 : currentFindMatch - 1)
+    : (currentFindMatch + 1) % count;
+  findCountEl.textContent = `${currentFindMatch + 1}/${count}`;
+  const found = window.find(
+    query,
+    caseSensitiveEl.checked,
+    backwards,
+    true,
+    false,
+    false,
+    false
+  );
+  if (!found) toast('未找到匹配内容');
+  return found;
+}
+
+function replaceCurrentMatch() {
+  if (!findInputEl.value) return;
+  let matches = getFindMatches();
+  if (matches.length === 0) { toast('未找到匹配内容'); return; }
+  if (currentFindMatch < 0 || currentFindMatch >= matches.length) currentFindMatch = 0;
+  const match = matches[currentFindMatch];
+  const content = editor.getMarkdown();
+  const nextContent = content.slice(0, match.index) +
+    replaceInputEl.value +
+    content.slice(match.index + match.length);
+  editor.setMarkdown(nextContent, false);
+  currentFindMatch -= 1;
+  updateFindCount();
+  findInEditor(false);
+}
+
+function replaceAllMatches() {
+  const expression = getFindExpression();
+  if (!expression) return;
+  const content = editor.getMarkdown();
+  const matches = content.match(expression) || [];
+  if (matches.length === 0) {
+    toast('未找到匹配内容');
+    return;
+  }
+  const nextContent = content.replace(expression, () => replaceInputEl.value);
+  editor.setMarkdown(nextContent, false);
+  currentFindMatch = -1;
+  updateFindCount();
+  toast(`已替换 ${matches.length} 处`);
+}
+
+// ============ 拖拽 ============
+let dragCounter = 0;
+window.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  if (hasFiles(e)) { dragCounter++; dropOverlay.classList.add('active'); }
+});
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', (e) => {
+  if (hasFiles(e)) { dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dropOverlay.classList.remove('active'); } }
+});
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('active');
+  const file = Array.from(e.dataTransfer.files)[0];
+  if (!file) return;
+  const filePath = window.api.getPathForFile(file);
+  if (!filePath) return;
+  if (!/\.(md|markdown|mdown|txt)$/i.test(filePath)) {
+    toast('仅支持 Markdown 文件 (.md/.markdown/.txt)');
+    return;
+  }
+  try {
+    const res = await window.api.openPath(filePath);
+    if (res.error) { toast('打开失败: ' + res.error); return; }
+    if (!(await confirmBeforeReplace())) return;
+    loadContent(res.filePath, res.content, res.baseUrl);
+  } catch (error) {
+    toast('打开失败: ' + error.message);
+  }
+});
+
+function hasFiles(e) {
+  return e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+}
+
+// ============ 工具栏按钮 ============
+document.getElementById('btn-new').addEventListener('click', () => newDocument());
+document.getElementById('btn-open').addEventListener('click', openFile);
+document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
+document.getElementById('btn-find').addEventListener('click', () => showFindPanel(false));
+modeButtonEl.addEventListener('click', toggleEditMode);
+document.getElementById('btn-theme').addEventListener('click', toggleTheme);
+
+document.getElementById('btn-find-expand').addEventListener('click', () => {
+  findPanelEl.classList.toggle('replace-mode');
+  if (findPanelEl.classList.contains('replace-mode')) replaceInputEl.focus();
+});
+document.getElementById('btn-find-prev').addEventListener('click', () => findInEditor(true));
+document.getElementById('btn-find-next').addEventListener('click', () => findInEditor(false));
+document.getElementById('btn-find-close').addEventListener('click', closeFindPanel);
+document.getElementById('btn-replace').addEventListener('click', replaceCurrentMatch);
+document.getElementById('btn-replace-all').addEventListener('click', replaceAllMatches);
+findInputEl.addEventListener('input', updateFindCount);
+caseSensitiveEl.addEventListener('change', updateFindCount);
+findInputEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    findInEditor(event.shiftKey);
+  } else if (event.key === 'Escape') {
+    closeFindPanel();
+  }
+});
+replaceInputEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    event.ctrlKey ? replaceAllMatches() : replaceCurrentMatch();
+  } else if (event.key === 'Escape') {
+    closeFindPanel();
+  }
+});
+
+function handleEditorCommand(name, payload = {}) {
+  try {
+    switch (name) {
+      case 'new': void newDocument(); break;
+      case 'find': showFindPanel(false); break;
+      case 'replace': showFindPanel(true); break;
+      case 'findNext':
+        if (findPanelEl.hidden) showFindPanel(false);
+        else findInEditor(false);
+        break;
+      case 'findPrevious':
+        if (findPanelEl.hidden) showFindPanel(false);
+        else findInEditor(true);
+        break;
+      case 'toggleMode': toggleEditMode(); break;
+      case 'popup': openToolbarPopup(payload.name); break;
+      case 'dateTime': editor.insertText('\n' + nowString() + '\n'); break;
+      default: editor.exec(name, payload); break;
+    }
+  } catch (error) {
+    console.warn('编辑命令失败:', name, error);
+    toast('该编辑操作当前不可用');
+  }
+}
+
+// ============ 菜单事件 ============
+window.api.onMenuOpen(() => openFile());
+window.api.onMenuSave(() => saveFile(false));
+window.api.onMenuSaveAs(() => saveFile(true));
+window.api.onMenuToggleTheme(() => toggleTheme());
+window.api.onEditorCommand(handleEditorCommand);
+window.api.onSystemThemeChanged((theme) => applyTheme(theme, true));
+window.api.onSaveBeforeClose(async () => {
+  if (await saveFile(false)) window.api.closeAfterSave();
+});
+
+// ============ 右键上下文菜单（类 Typora）============
+const MENU_ITEMS = [
+  { label: '撤销', hotkey: 'Ctrl+Z', action: () => editor.exec('undo') },
+  { label: '重做', hotkey: 'Ctrl+Shift+Z', action: () => editor.exec('redo') },
+  { divider: true },
+  { label: '剪切', hotkey: 'Ctrl+X', action: () => document.execCommand('cut') },
+  { label: '复制', hotkey: 'Ctrl+C', action: () => document.execCommand('copy') },
+  { label: '粘贴', hotkey: 'Ctrl+V', action: () => document.execCommand('paste') },
+  { label: '全选', hotkey: 'Ctrl+A', action: () => editor.exec('selectAll') },
+  { divider: true },
+  {
+    label: '段落', submenu: [
+      { label: '正文', hotkey: 'Ctrl+0', action: () => editor.exec('heading', { level: 0 }) },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        label: `${index + 1} 级标题`,
+        hotkey: `Ctrl+${index + 1}`,
+        action: () => editor.exec('heading', { level: index + 1 })
+      })),
+      { divider: true },
+      { label: '引用块', action: () => editor.exec('blockQuote') },
+      { label: '无序列表', action: () => editor.exec('bulletList') },
+      { label: '有序列表', action: () => editor.exec('orderedList') },
+      { label: '任务列表', action: () => editor.exec('taskList') },
+      { label: '代码块', action: () => editor.exec('codeBlock') },
+    ]
+  },
+  {
+    label: '格式', submenu: [
+      { label: '加粗', hotkey: 'Ctrl+B', action: () => editor.exec('bold') },
+      { label: '斜体', hotkey: 'Ctrl+I', action: () => editor.exec('italic') },
+      { label: '删除线', action: () => editor.exec('strike') },
+      { label: '行内代码', action: () => editor.exec('code') },
+      { divider: true },
+      { label: '插入链接…', hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
+      { divider: true },
+      { label: '增加缩进', action: () => editor.exec('indent') },
+      { label: '减少缩进', action: () => editor.exec('outdent') },
+    ]
+  },
+  {
+    label: '插入', submenu: [
+      { label: '图片…', action: () => openToolbarPopup('image') },
+      { label: '链接…', hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
+      { label: '表格', action: () => openToolbarPopup('table') },
+      { label: '代码块', action: () => editor.exec('codeBlock') },
+      { label: '水平分割线', action: () => editor.exec('hr') },
+      { label: '日期时间', action: () => editor.insertText('\n' + nowString() + '\n') },
+    ]
+  },
+  { divider: true },
+  { label: '查找…', hotkey: 'Ctrl+F', action: () => showFindPanel(false) },
+  { label: '替换…', hotkey: 'Ctrl+H', action: () => showFindPanel(true) },
+  { label: '切换源码模式', hotkey: 'Ctrl+/', action: () => toggleEditMode() },
+  { label: '切换主题', hotkey: 'Ctrl+Shift+T', action: () => toggleTheme() },
+];
+
+function nowString() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// Toast UI 的图片、链接和表格不是无参命令，而是工具栏弹窗。
+// 延迟到当前 mousedown 完成后再点击，否则其全局监听器会立刻关闭刚打开的弹窗。
+function openToolbarPopup(name) {
+  setTimeout(() => {
+    const button = document.querySelector(`.toastui-editor-toolbar-icons.${name}`);
+    if (button && !button.disabled) {
+      button.click();
+    } else {
+      toast('当前无法执行该插入操作');
+    }
+  }, 0);
+}
+
+// ---- 菜单渲染 ----
+let contextMenuEl = null;
+
+function hideContextMenu() {
+  document.querySelectorAll('.ctx-submenu').forEach(el => el.remove());
+  if (contextMenuEl) { contextMenuEl.remove(); contextMenuEl = null; }
+}
+
+function buildMenu(items, isSubmenu = false) {
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu' + (isSubmenu ? ' ctx-submenu' : '');
+  items.forEach((item) => {
+    if (item.divider) {
+      const sep = document.createElement('div');
+      sep.className = 'ctx-divider';
+      menu.appendChild(sep);
+      return;
+    }
+    const row = document.createElement('div');
+    row.className = 'ctx-item';
+    row.dataset.menuLabel = item.label;
+    row.addEventListener('mouseenter', () => {
+      if (item.submenu) {
+        showSubmenu(row, item.submenu);
+      } else if (!isSubmenu) {
+        document.querySelectorAll('.ctx-submenu').forEach(el => el.remove());
+      }
+    });
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (item.submenu) { showSubmenu(row, item.submenu); return; }
+      try { item.action && item.action(); } catch (err) { console.warn('菜单项失败:', item.label, err); }
+      finally { hideContextMenu(); }
+    });
+    const label = document.createElement('span');
+    label.className = 'ctx-label';
+    label.textContent = item.label;
+    row.appendChild(label);
+    if (item.hotkey) {
+      const hk = document.createElement('span');
+      hk.className = 'ctx-hotkey';
+      hk.textContent = item.hotkey;
+      row.appendChild(hk);
+    }
+    if (item.submenu) {
+      const arrow = document.createElement('span');
+      arrow.className = 'ctx-arrow';
+      arrow.textContent = '▸';
+      row.appendChild(arrow);
+    }
+    menu.appendChild(row);
+  });
+  return menu;
+}
+
+function showSubmenu(parentRow, items) {
+  document.querySelectorAll('.ctx-submenu').forEach(el => el.remove());
+  const sub = buildMenu(items, true);
+  document.body.appendChild(sub);
+  const rect = parentRow.getBoundingClientRect();
+  let left = rect.right - 2;
+  let top = rect.top - 4;
+  if (left + sub.offsetWidth > window.innerWidth) left = rect.left - sub.offsetWidth + 2;
+  if (top + sub.offsetHeight > window.innerHeight) top = window.innerHeight - sub.offsetHeight - 8;
+  sub.style.left = Math.max(8, left) + 'px';
+  sub.style.top = Math.max(8, top) + 'px';
+}
+
+function showContextMenu(x, y) {
+  hideContextMenu();
+  contextMenuEl = buildMenu(MENU_ITEMS, false);
+  document.body.appendChild(contextMenuEl);
+  contextMenuEl.style.visibility = 'hidden';
+  contextMenuEl.style.left = x + 'px';
+  contextMenuEl.style.top = y + 'px';
+  const w = contextMenuEl.offsetWidth, h = contextMenuEl.offsetHeight;
+  const left = x + w > window.innerWidth ? window.innerWidth - w - 8 : x;
+  const top = y + h > window.innerHeight ? window.innerHeight - h - 8 : y;
+  contextMenuEl.style.left = Math.max(8, left) + 'px';
+  contextMenuEl.style.top = Math.max(8, top) + 'px';
+  contextMenuEl.style.visibility = 'visible';
+}
+
+function setupContextMenu() {
+  document.addEventListener('contextmenu', (e) => {
+    // 在编辑区内弹自定义菜单
+    const inEditor = e.target.closest('.toastui-editor');
+    if (!inEditor) return;
+    if (e.target.closest('.toastui-editor-defaultUI-toolbar')) return;  // 工具栏用默认
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY);
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!contextMenuEl) return;
+    if (e.target.closest('.ctx-menu') || e.target.closest('.ctx-submenu')) return;
+    hideContextMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideContextMenu();
+  });
+  window.addEventListener('scroll', hideContextMenu, true);
+  window.addEventListener('resize', hideContextMenu);
+}
+
+// ============ 启动 ============
+async function init() {
+  try {
+    const sys = await window.api.getSystemTheme();
+    currentTheme = sys;
+  } catch (e) { /* 默认 light */ }
+  document.body.classList.toggle('theme-dark', currentTheme === 'dark');
+  document.body.classList.toggle('theme-light', currentTheme === 'light');
+  themeIconEl.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+
+  editor = createEditor(WELCOME);
+  window.editor = editor;
+  updateEditMode(currentEditMode);
+  updateWordCount(editor.getMarkdown());
+  setupContextMenu();
+}
+
+init();
