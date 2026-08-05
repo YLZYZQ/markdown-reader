@@ -867,11 +867,41 @@ async function init() {
   themeIconEl.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
   setSidebarCollapsed(sidebarCollapsed, false);
 
+  // 先用欢迎页初始化编辑器；若有「打开方式」传入的初始文件，则立即替换。
   editor = createEditor(WELCOME);
   window.editor = editor;
   updateEditMode(currentEditMode);
   updateWordCount(editor.getMarkdown());
+  updateTitle();
   setupContextMenu();
+
+  // 应用已在运行时，再次通过「打开方式」唤起，主进程会转发文件路径到此处。
+  window.api.onAppOpenFile(async (filePath) => {
+    if (!filePath) return;
+    if (!(await confirmBeforeReplace())) return;
+    try {
+      const res = await window.api.openPath(filePath);
+      if (res.error) { toast('打开失败: ' + res.error); return; }
+      loadContent(res.filePath, res.content, res.baseUrl);
+    } catch (error) {
+      toast('打开失败: ' + error.message);
+    }
+  });
+
+  // 冷启动时若通过「打开方式」带入了文件，直接打开它。
+  try {
+    const initialFile = await window.api.getInitialFile();
+    if (initialFile) {
+      const res = await window.api.openPath(initialFile);
+      if (res && !res.error) {
+        loadContent(res.filePath, res.content, res.baseUrl);
+      } else if (res && res.error) {
+        toast('打开失败: ' + res.error);
+      }
+    }
+  } catch (error) {
+    console.warn('打开初始文件失败:', error);
+  }
 }
 
 init();

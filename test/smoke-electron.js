@@ -5,6 +5,7 @@ const path = require('path');
 
 app.commandLine.appendSwitch('disable-gpu');
 ipcMain.handle('theme:getSystem', () => 'light');
+ipcMain.handle('app:getInitialFile', () => null);
 ipcMain.handle('image:saveBlob', (_event, _filePath, _fileName, arrayBuffer) => ({
   isArrayBuffer: arrayBuffer instanceof ArrayBuffer,
   byteLength: arrayBuffer.byteLength

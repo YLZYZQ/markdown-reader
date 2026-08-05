@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   // 文件操作
   openFile: () => ipcRenderer.invoke('file:open'),
   openPath: (filePath) => ipcRenderer.invoke('file:openPath', filePath),
+  getInitialFile: () => ipcRenderer.invoke('app:getInitialFile'),
+  onAppOpenFile: (cb) => on('app:openFile', cb),
   listDirectoryForDocument: (filePath) =>
     ipcRenderer.invoke('directory:listForDocument', filePath),
   saveFile: (filePath, content) => ipcRenderer.invoke('file:save', filePath, content),

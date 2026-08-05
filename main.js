@@ -13,6 +13,7 @@ const {
   sanitizeImageFileName
 } = require('./lib/file-utils');
 const { listDocumentTree } = require('./lib/file-tree');
+const { parseFileArg } = require('./lib/cli-args');
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const authorizedDocumentPaths = new Set();
@@ -191,6 +192,14 @@ function createWindow() {
     return { action: 'deny' };
   });
 }
+
+// 渲染层启动时取用「打开方式」传入的初始文件路径，取后清空。
+ipcMain.handle('app:getInitialFile', async (event) => {
+  if (!isCurrentRenderer(event)) return null;
+  const file = pendingFilePath;
+  pendingFilePath = null;
+  return file;
+});
 
 ipcMain.handle('file:open', async (event) => {
   if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
@@ -407,6 +416,35 @@ function buildMenu() {
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// ============ 文件关联 / 打开方式 ============
+// 启动时（或收到 open-file / second-instance 时）待打开的文件路径。
+let pendingFilePath = parseFileArg(process.argv);
+
+// 单实例锁：应用已在运行时，再次「打开方式」不会新开窗口，
+// 而是把目标文件转发给已存在的窗口打开。
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (event, commandLine) => {
+    const file = parseFileArg(commandLine);
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      // 窗口尚未就绪，暂存路径等待渲染层取用。
+      if (file) pendingFilePath = file;
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    if (file) mainWindow.webContents.send('app:openFile', file);
+  });
+}
+
+// macOS：双击关联文件启动已运行的应用时由此事件传入路径。
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  pendingFilePath = filePath;
+});
 
 app.whenReady().then(() => {
   createWindow();
