@@ -22,6 +22,8 @@ let mainWindow = null;
 let isDocumentDirty = false;
 let allowWindowClose = false;
 let closePromptOpen = false;
+let rendererReady = false;
+let pendingSystemDocumentPath = parseFileArg(process.argv);
 
 const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR ||
   (fs.existsSync(path.join(path.dirname(process.execPath), 'portable-mode'))
@@ -34,6 +36,26 @@ if (portableExecutableDir) {
 
 function isCurrentRenderer(event) {
   return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function sendPendingSystemDocument() {
+  if (!rendererReady || !mainWindow || mainWindow.isDestroyed() || !pendingSystemDocumentPath) return;
+  const filePath = pendingSystemDocumentPath;
+  pendingSystemDocumentPath = null;
+  mainWindow.webContents.send('system:openDocument', filePath);
+}
+
+function queueSystemDocument(filePath) {
+  if (!filePath) return;
+  pendingSystemDocumentPath = filePath;
+  sendPendingSystemDocument();
 }
 
 function errorResult(error) {
@@ -153,6 +175,7 @@ function createWindow() {
   isDocumentDirty = false;
   allowWindowClose = false;
   closePromptOpen = false;
+  rendererReady = false;
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -181,6 +204,7 @@ function createWindow() {
   });
   mainWindow.on('closed', () => {
     mainWindow = null;
+    rendererReady = false;
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -192,14 +216,6 @@ function createWindow() {
     return { action: 'deny' };
   });
 }
-
-// 渲染层启动时取用「打开方式」传入的初始文件路径，取后清空。
-ipcMain.handle('app:getInitialFile', async (event) => {
-  if (!isCurrentRenderer(event)) return null;
-  const file = pendingFilePath;
-  pendingFilePath = null;
-  return file;
-});
 
 ipcMain.handle('file:open', async (event) => {
   if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
@@ -226,6 +242,24 @@ ipcMain.handle('file:openPath', async (event, filePath) => {
   } catch (error) {
     return errorResult(error);
   }
+});
+
+ipcMain.handle('startup:takeDocument', async (event) => {
+  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  const filePath = pendingSystemDocumentPath;
+  pendingSystemDocumentPath = null;
+  if (!filePath) return { canceled: true };
+  try {
+    return await readDocument(filePath);
+  } catch (error) {
+    return errorResult(error);
+  }
+});
+
+ipcMain.on('app:rendererReady', (event) => {
+  if (!isCurrentRenderer(event)) return;
+  rendererReady = true;
+  sendPendingSystemDocument();
 });
 
 ipcMain.handle('directory:listForDocument', async (event, filePath) => {
@@ -403,65 +437,72 @@ function buildMenu() {
     },
     {
       label: '帮助',
-      submenu: [{
-        label: '关于',
-        click: () => dialog.showMessageBox(mainWindow, {
+      submenu: [
+        {
+          label: '操作说明',
+          click: () => dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            title: '操作说明',
+            message: 'Markdown阅读器操作说明',
+            detail: [
+              '打开文档：双击 .md 文件、右键“使用 Markdown阅读器打开”、Ctrl+O 或拖拽文件。',
+              '新建文档：直接双击阅读器程序，或按 Ctrl+N。',
+              '保存：Ctrl+S 保存，Ctrl+Shift+S 另存为。',
+              '文件侧边栏：显示当前文档目录，点击文件切换；按 Ctrl+Shift+E 可收起或展开。',
+              '编辑：Ctrl+/ 切换源码和所见即所得，Ctrl+F 查找，Ctrl+H 替换。',
+              '主题：Ctrl+Shift+T 切换亮色和暗色主题。',
+            ].join('\n\n')
+          })
+        },
+        { type: 'separator' },
+        {
+          label: '关于',
+          click: () => dialog.showMessageBox(mainWindow, {
           type: 'info',
           title: '关于',
-          message: 'Markdown阅读器 1.0.0',
+          message: `Markdown阅读器 ${app.getVersion()}`,
           detail: '一个像 Typora 的 Markdown 阅读器/编辑器\n基于 Electron + Toast UI Editor\n即时渲染 · 亮/暗主题 · 免安装'
-        })
-      }]
+          })
+        }
+      ]
     }
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// ============ 文件关联 / 打开方式 ============
-// 启动时（或收到 open-file / second-instance 时）待打开的文件路径。
-let pendingFilePath = parseFileArg(process.argv);
-
-// 单实例锁：应用已在运行时，再次「打开方式」不会新开窗口，
-// 而是把目标文件转发给已存在的窗口打开。
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
+if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', (event, commandLine) => {
-    const file = parseFileArg(commandLine);
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      // 窗口尚未就绪，暂存路径等待渲染层取用。
-      if (file) pendingFilePath = file;
-      return;
-    }
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-    if (file) mainWindow.webContents.send('app:openFile', file);
+  app.on('second-instance', (_event, argv) => {
+    queueSystemDocument(parseFileArg(argv));
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    focusMainWindow();
+  });
+
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    queueSystemDocument(parseFileArg([process.execPath, filePath]));
+    if (app.isReady() && (!mainWindow || mainWindow.isDestroyed())) createWindow();
+    focusMainWindow();
+  });
+
+  app.whenReady().then(() => {
+    createWindow();
+    buildMenu();
+
+    nativeTheme.on('updated', () => {
+      mainWindow?.webContents.send(
+        'theme:systemChanged',
+        nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+      );
+    });
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
   });
 }
-
-// macOS：双击关联文件启动已运行的应用时由此事件传入路径。
-app.on('open-file', (event, filePath) => {
-  event.preventDefault();
-  pendingFilePath = filePath;
-});
-
-app.whenReady().then(() => {
-  createWindow();
-  buildMenu();
-
-  nativeTheme.on('updated', () => {
-    mainWindow?.webContents.send(
-      'theme:systemChanged',
-      nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-    );
-  });
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});

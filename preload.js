@@ -11,8 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   // 文件操作
   openFile: () => ipcRenderer.invoke('file:open'),
   openPath: (filePath) => ipcRenderer.invoke('file:openPath', filePath),
-  getInitialFile: () => ipcRenderer.invoke('app:getInitialFile'),
-  onAppOpenFile: (cb) => on('app:openFile', cb),
+  takeStartupDocument: () => ipcRenderer.invoke('startup:takeDocument'),
+  notifyRendererReady: () => ipcRenderer.send('app:rendererReady'),
   listDirectoryForDocument: (filePath) =>
     ipcRenderer.invoke('directory:listForDocument', filePath),
   saveFile: (filePath, content) => ipcRenderer.invoke('file:save', filePath, content),
@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('api', {
   onMenuToggleTheme: (cb) => on('menu:toggleTheme', cb),
   onEditorCommand: (cb) => on('editor:command', cb),
   onSaveBeforeClose: (cb) => on('document:saveBeforeClose', cb),
+  onSystemOpenDocument: (cb) => on('system:openDocument', cb),
 
   // 系统主题变化
   onSystemThemeChanged: (cb) => on('theme:systemChanged', cb)

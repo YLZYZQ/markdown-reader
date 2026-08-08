@@ -1,38 +1,6 @@
 // 渲染进程：基于 Toast UI Editor 的 Markdown 编辑器
 'use strict';
 
-const WELCOME = `# 欢迎使用 Markdown 阅读器 📝
-
-一个像 **Typora** 的 Markdown 编辑器，支持**实时渲染**。
-
-## 快速开始
-
-- 按 \`Ctrl + O\` 或点击右上角「打开」打开 .md 文件
-- 直接把 .md 文件**拖拽**到窗口
-- \`Ctrl + S\` 保存，\`Ctrl + Shift + S\` 另存为
-- \`Ctrl + Shift + T\` 切换亮/暗主题
-
-## 代码块
-
-输入 \`\`\` 后回车创建代码块，可在开头写语言名获得语法高亮：
-
-\`\`\`javascript
-function greet(name) {
-  return \`Hello, \${name}!\`;
-}
-\`\`\`
-
-## 表格
-
-| 功能     | 支持 |
-| -------- | ---- |
-| 实时渲染 | ✅   |
-| 代码高亮 | ✅   |
-| 暗色模式 | ✅   |
-
-开始你的写作吧！
-`;
-
 // ============ DOM ============
 const filenameEl = document.getElementById('filename');
 const statusInfoEl = document.getElementById('status-info');
@@ -68,6 +36,7 @@ let currentFindMatch = -1;
 let lastFindSignature = '';
 let fileTreeRequestId = 0;
 let sidebarCollapsed = false;
+let pendingSystemDocumentPath = null;
 try {
   sidebarCollapsed = localStorage.getItem('md-reader.sidebarCollapsed') === 'true';
 } catch (error) {
@@ -77,6 +46,14 @@ try {
 // Toast UI Editor 实例（UMD 全局）
 const Editor = toastui.Editor;
 const codeSyntaxHighlight = window.toastuiEditorBundle.codeSyntaxHighlight;
+
+window.api.onSystemOpenDocument((filePath) => {
+  if (!editor) {
+    pendingSystemDocumentPath = filePath;
+    return;
+  }
+  void openSystemDocument(filePath);
+});
 
 // ============ 主题 ============
 function applyTheme(theme, fromSystem = false) {
@@ -392,11 +369,27 @@ async function openFile() {
   }
 }
 
+async function openSystemDocument(filePath) {
+  if (!filePath || comparablePath(filePath) === comparablePath(currentFilePath)) return;
+  if (!(await confirmBeforeReplace())) return;
+  try {
+    const result = await window.api.openPath(filePath);
+    if (result.error) {
+      toast('打开失败: ' + result.error);
+      return;
+    }
+    loadContent(result.filePath, result.content, result.baseUrl);
+  } catch (error) {
+    toast('打开失败: ' + error.message);
+  }
+}
+
 function loadContent(filePath, content, baseUrl) {
   currentFilePath = filePath;
-  lastSavedContent = content;
   setDocumentBase(baseUrl);
   editor.setMarkdown(content, false);
+  // Toast UI 可能规范化末尾换行；以编辑器实际内容作为已保存基线，避免刚打开就误报修改。
+  lastSavedContent = editor.getMarkdown();
   findPanelEl.hidden = true;
   setDirty(false);
   setStatus('已打开: ' + baseName(filePath));
@@ -867,40 +860,29 @@ async function init() {
   themeIconEl.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
   setSidebarCollapsed(sidebarCollapsed, false);
 
-  // 先用欢迎页初始化编辑器；若有「打开方式」传入的初始文件，则立即替换。
-  editor = createEditor(WELCOME);
+  editor = createEditor('');
   window.editor = editor;
   updateEditMode(currentEditMode);
   updateWordCount(editor.getMarkdown());
   updateTitle();
+  setStatus('已新建空白文档');
   setupContextMenu();
 
-  // 应用已在运行时，再次通过「打开方式」唤起，主进程会转发文件路径到此处。
-  window.api.onAppOpenFile(async (filePath) => {
-    if (!filePath) return;
-    if (!(await confirmBeforeReplace())) return;
-    try {
-      const res = await window.api.openPath(filePath);
-      if (res.error) { toast('打开失败: ' + res.error); return; }
-      loadContent(res.filePath, res.content, res.baseUrl);
-    } catch (error) {
-      toast('打开失败: ' + error.message);
-    }
-  });
-
-  // 冷启动时若通过「打开方式」带入了文件，直接打开它。
   try {
-    const initialFile = await window.api.getInitialFile();
-    if (initialFile) {
-      const res = await window.api.openPath(initialFile);
-      if (res && !res.error) {
-        loadContent(res.filePath, res.content, res.baseUrl);
-      } else if (res && res.error) {
-        toast('打开失败: ' + res.error);
-      }
+    const startupDocument = await window.api.takeStartupDocument();
+    if (startupDocument && !startupDocument.canceled) {
+      if (startupDocument.error) toast('打开启动文档失败: ' + startupDocument.error);
+      else loadContent(startupDocument.filePath, startupDocument.content, startupDocument.baseUrl);
     }
   } catch (error) {
-    console.warn('打开初始文件失败:', error);
+    toast('读取启动文档失败: ' + error.message);
+  }
+
+  window.api.notifyRendererReady();
+  if (pendingSystemDocumentPath) {
+    const filePath = pendingSystemDocumentPath;
+    pendingSystemDocumentPath = null;
+    await openSystemDocument(filePath);
   }
 }
 

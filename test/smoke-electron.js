@@ -5,7 +5,18 @@ const path = require('path');
 
 app.commandLine.appendSwitch('disable-gpu');
 ipcMain.handle('theme:getSystem', () => 'light');
-ipcMain.handle('app:getInitialFile', () => null);
+ipcMain.handle('startup:takeDocument', () => ({ canceled: true }));
+ipcMain.handle('file:openPath', (_event, filePath) => ({
+  filePath,
+  content: '# 通过系统关联打开',
+  baseUrl: 'file:///C:/fixture/'
+}));
+ipcMain.handle('directory:listForDocument', () => ({
+  rootPath: 'C:\\fixture',
+  rootName: 'fixture',
+  entries: [],
+  truncated: false
+}));
 ipcMain.handle('image:saveBlob', (_event, _filePath, _fileName, arrayBuffer) => ({
   isArrayBuffer: arrayBuffer instanceof ArrayBuffer,
   byteLength: arrayBuffer.byteLength
@@ -44,6 +55,28 @@ app.whenReady().then(async () => {
   });
 
   await window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const blankState = await window.webContents.executeJavaScript(`({
+    markdown: window.editor.getMarkdown(),
+    title: document.title,
+    welcomePresent: document.body.textContent.includes('欢迎使用 Markdown 阅读器')
+  })`);
+  if (blankState.markdown !== '' || blankState.welcomePresent || blankState.title !== '未命名.md - Markdown阅读器') {
+    finish(new Error(`Blank startup regression: ${JSON.stringify(blankState)}`));
+    return;
+  }
+
+  window.webContents.send('system:openDocument', 'C:\\fixture\\关联打开.md');
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const systemOpenState = await window.webContents.executeJavaScript(`({
+    markdown: window.editor.getMarkdown(),
+    title: document.title
+  })`);
+  if (systemOpenState.markdown !== '# 通过系统关联打开' || systemOpenState.title !== '关联打开.md - Markdown阅读器') {
+    finish(new Error(`System open regression: ${JSON.stringify(systemOpenState)}`));
+    return;
+  }
+
   let state;
   try {
     state = await window.webContents.executeJavaScript(`(async () => {
