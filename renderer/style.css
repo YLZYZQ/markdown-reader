@@ -254,6 +254,66 @@ body {
 
 /* ============ Toast UI Editor 适配 ============ */
 #editor { height: 100%; }
+
+.toastui-editor-md-preview .mermaid-diagram {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 16px 0;
+  padding: 16px;
+  overflow: auto;
+  text-align: center;
+  background: var(--editor-bg, #fff);
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 6px;
+}
+
+.toastui-editor-md-preview .mermaid-diagram svg {
+  display: inline-block;
+  max-width: none;
+  height: auto;
+}
+
+.toastui-editor-md-preview .mermaid-diagram[data-mermaid-error="true"],
+.mermaid-wysiwyg-preview[data-mermaid-error="true"] {
+  color: #c0392b;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.toastui-editor-ww-container {
+  position: relative;
+}
+
+.mermaid-wysiwyg-preview {
+  position: absolute;
+  /* Toast UI gives the ProseMirror contents a stacking level of 20. Keep the
+     visual-only diagram above it while leaving its code-block contentDOM intact. */
+  z-index: 21;
+  box-sizing: border-box;
+  padding: 16px;
+  pointer-events: auto;
+  user-select: none;
+  background-color: var(--editor-bg, #fff);
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 6px;
+}
+
+.mermaid-wysiwyg-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.toastui-editor-ww-code-block-highlighting[data-language="mermaid"] > pre {
+  min-height: 160px;
+}
+
+.theme-dark .mermaid-wysiwyg-preview {
+  background-color: #121212;
+}
 #editor .toastui-editor-defaultUI {
   border: none !important;
   border-radius: 0 !important;

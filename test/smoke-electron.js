@@ -215,6 +215,78 @@ app.whenReady().then(async () => {
     rootResults.sidebarExpanded = document.getElementById('btn-sidebar').getAttribute('aria-expanded');
     document.getElementById('btn-sidebar').click();
 
+    const mermaidMarkdown = [
+      '\`\`\`mermaid',
+      'flowchart LR',
+      'A[24V J1] --> B[DC_LINK]',
+      '\`\`\`',
+      '',
+      '\`\`\`markup',
+      'flowchart LR',
+      'C[兼容旧文档] --> D[完成渲染]',
+      '\`\`\`'
+    ].join('\\n');
+    window.editor.setMarkdown(mermaidMarkdown, false);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (document.querySelectorAll('.toastui-editor-md-preview .mermaid-diagram svg').length === 2) break;
+      await wait(100);
+    }
+    const mermaidState = {
+      sourcePreviewSvgCount: document.querySelectorAll(
+        '.toastui-editor-md-preview .mermaid-diagram svg'
+      ).length
+    };
+    window.editor.changeMode('wysiwyg');
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (document.querySelectorAll(
+        '.mermaid-wysiwyg-preview[data-mermaid-rendered="true"]'
+      ).length === 2) break;
+      await wait(100);
+    }
+    Object.assign(mermaidState, {
+      svgCount: Array.from(
+        document.querySelectorAll('.mermaid-wysiwyg-preview[data-mermaid-rendered="true"]')
+      ).filter((element) => element.querySelector('svg')).length,
+      visiblePreviewCount: Array.from(
+        document.querySelectorAll('.mermaid-wysiwyg-preview[data-mermaid-rendered="true"]')
+      ).filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const topElement = document.elementFromPoint(
+          rect.left + Math.min(12, rect.width / 2),
+          rect.top + Math.min(12, rect.height / 2)
+        );
+        return topElement === element || element.contains(topElement);
+      }).length,
+      sourceCodeCount: document.querySelectorAll(
+        '.toastui-editor-ww-code-block-highlighting > pre code'
+      ).length,
+      markdown: window.editor.getMarkdown()
+    });
+    const wysiwygScroll = document.querySelector('.toastui-editor-ww-container .ProseMirror');
+    wysiwygScroll.scrollTop = 80;
+    wysiwygScroll.dispatchEvent(new Event('scroll'));
+    await wait(100);
+    mermaidState.scrollAligned = Array.from(
+      document.querySelectorAll('.toastui-editor-ww-code-block-highlighting')
+    ).every((wrapper) => {
+      const preview = Array.from(document.querySelectorAll('.mermaid-wysiwyg-preview'))
+        .find((element) => {
+          const wrapperRect = wrapper.getBoundingClientRect();
+          const previewRect = element.getBoundingClientRect();
+          return Math.abs(wrapperRect.top - previewRect.top) < 1 &&
+            Math.abs(wrapperRect.left - previewRect.left) < 1;
+        });
+      return Boolean(preview);
+    });
+    window.editor.changeMode('markdown');
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (document.querySelectorAll('.toastui-editor-md-preview .mermaid-diagram svg').length === 2) break;
+      await wait(100);
+    }
+    mermaidState.previewSvgCount = document.querySelectorAll(
+      '.toastui-editor-md-preview .mermaid-diagram svg'
+    ).length;
+
     const assetUrls = Array.from(document.querySelectorAll('link[href]'), (link) => link.href);
     document.getElementById('document-base').href = 'file:///C:/markdown-document/';
     const ipcResult = await window.api.saveImageBlob(
@@ -231,6 +303,7 @@ app.whenReady().then(async () => {
       hasSidebar: Boolean(document.getElementById('file-sidebar') && document.getElementById('file-tree')),
       assetsPinned: assetUrls.every((url, index) => document.querySelectorAll('link[href]')[index].href === url),
       arrayBufferIpc: ipcResult.isArrayBuffer && ipcResult.byteLength === 3,
+      mermaidState,
       commandResults,
       popupResults,
       formatResults,
@@ -243,6 +316,19 @@ app.whenReady().then(async () => {
 
   if (!state.editorReady || !state.apiReady || !state.hasToolbar || !state.hasSidebar || !state.assetsPinned || !state.arrayBufferIpc) {
     finish(new Error(`Renderer did not initialize: ${JSON.stringify(state)}`));
+    return;
+  }
+  if (
+    state.mermaidState.svgCount !== 2 ||
+    state.mermaidState.visiblePreviewCount !== 2 ||
+    !state.mermaidState.scrollAligned ||
+    state.mermaidState.sourcePreviewSvgCount !== 2 ||
+    state.mermaidState.previewSvgCount !== 2 ||
+    state.mermaidState.sourceCodeCount !== 2 ||
+    !/```mermaid[\s\S]*A\[24V J1\] --> B\[DC_LINK\]/.test(state.mermaidState.markdown) ||
+    !/```markup[\s\S]*C\[兼容旧文档\] --> D\[完成渲染\]/.test(state.mermaidState.markdown)
+  ) {
+    finish(new Error(`Mermaid rendering regression: ${JSON.stringify(state.mermaidState)}`));
     return;
   }
   if (pageErrors.length > 0) {

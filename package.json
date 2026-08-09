@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "build:renderer": "esbuild build-bundle.js --bundle --minify --platform=browser --outfile=renderer/tui-editor/editor-bundle.js",
     "test": "node --test test/*.test.js",
     "test:smoke": "electron test/smoke-electron.js",
     "dist": "electron-builder --win",
@@ -17,6 +18,7 @@
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",
     "@toast-ui/editor-plugin-code-syntax-highlight": "^3.1.0",
+    "mermaid": "^11.16.1",
     "prismjs": "^1.30.0"
   },
   "devDependencies": {

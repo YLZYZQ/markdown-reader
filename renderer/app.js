@@ -46,6 +46,170 @@ try {
 // Toast UI Editor 实例（UMD 全局）
 const Editor = toastui.Editor;
 const codeSyntaxHighlight = window.toastuiEditorBundle.codeSyntaxHighlight;
+const mermaid = window.toastuiEditorBundle.mermaid;
+let mermaidRenderScheduled = false;
+let mermaidRenderRunning = false;
+let mermaidRenderRequested = false;
+let mermaidDiagramId = 0;
+const mermaidWysiwygPreviews = new Map();
+
+function isMermaidCodeBlock(node) {
+  const language = (node.info || '').trim().split(/\s+/, 1)[0].toLowerCase();
+  return isMermaidSource(language, node.literal || '');
+}
+
+function isMermaidSource(language, source) {
+  if (language === 'mermaid') return true;
+
+  // Toast UI 新建代码块时默认使用 markup。对明显的 Mermaid 流程图兼容识别，
+  // 这样旧文档无需逐个修改围栏语言；其他 markup 代码仍按普通代码显示。
+  return language === 'markup' && /^\s*(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b/i.test(source);
+}
+
+const mermaidHTMLRenderer = {
+  codeBlock(node, context) {
+    if (!isMermaidCodeBlock(node)) return context.origin();
+    context.skipChildren();
+    return [
+      {
+        type: 'openTag',
+        tagName: 'div',
+        classNames: ['mermaid-diagram'],
+        attributes: { contenteditable: 'false' },
+        outerNewLine: true
+      },
+      { type: 'text', content: node.literal || '' },
+      { type: 'closeTag', tagName: 'div', outerNewLine: true }
+    ];
+  }
+};
+
+function configureMermaid() {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    suppressErrorRendering: true,
+    theme: currentTheme === 'dark' ? 'dark' : 'default'
+  });
+}
+
+async function renderMermaidDiagrams() {
+  prepareWysiwygMermaidDiagrams();
+  if (mermaidRenderRunning) {
+    mermaidRenderRequested = true;
+    return;
+  }
+
+  const diagrams = Array.from(document.querySelectorAll(
+    '.toastui-editor-md-preview .mermaid-diagram:not([data-mermaid-rendered]), ' +
+    '.mermaid-wysiwyg-preview:not([data-mermaid-rendered])'
+  ));
+  if (!diagrams.length) return;
+
+  mermaidRenderRunning = true;
+  configureMermaid();
+  for (const diagram of diagrams) {
+    if (!diagram.isConnected || diagram.dataset.mermaidRendering === 'true') continue;
+    const isWysiwygDiagram = diagram.classList.contains('mermaid-wysiwyg-preview');
+    const source = isWysiwygDiagram ? diagram.mermaidSource || '' : diagram.textContent || '';
+    diagram.dataset.mermaidRendering = 'true';
+    try {
+      const id = `mermaid-diagram-${++mermaidDiagramId}`;
+      const { svg, bindFunctions } = await mermaid.render(id, source);
+      if (!diagram.isConnected) continue;
+      if (isWysiwygDiagram) {
+        // 直接插入 SVG，而不是将其编码为 CSS 背景。复杂图的 SVG 含有大量
+        // CSS 选择器；作为 data URL 时 Chromium 在从源码模式切换后可能不绘制它。
+        diagram.innerHTML = svg;
+        diagram.setAttribute('role', 'img');
+        diagram.setAttribute('aria-label', 'Mermaid 图表');
+      } else {
+        diagram.innerHTML = svg;
+      }
+      diagram.dataset.mermaidRendered = 'true';
+      diagram.removeAttribute('data-mermaid-rendering');
+      diagram.removeAttribute('data-mermaid-error');
+      if (bindFunctions) bindFunctions(diagram);
+    } catch (error) {
+      if (!diagram.isConnected) continue;
+      if (!isWysiwygDiagram) diagram.textContent = source;
+      else {
+        diagram.style.backgroundImage = '';
+        diagram.textContent = `Mermaid 图表语法错误\n${source}`;
+      }
+      diagram.dataset.mermaidRendered = 'true';
+      diagram.dataset.mermaidError = 'true';
+      diagram.removeAttribute('data-mermaid-rendering');
+      console.warn('Mermaid 图表渲染失败:', error);
+    }
+  }
+  mermaidRenderRunning = false;
+
+  if (mermaidRenderRequested) {
+    mermaidRenderRequested = false;
+    scheduleMermaidRender();
+  }
+}
+
+function prepareWysiwygMermaidDiagrams() {
+  for (const [wrapper, preview] of mermaidWysiwygPreviews) {
+    if (!wrapper.isConnected || !preview.isConnected) {
+      preview.remove();
+      mermaidWysiwygPreviews.delete(wrapper);
+    }
+  }
+
+  document.querySelectorAll('.toastui-editor-ww-code-block-highlighting').forEach((wrapper) => {
+    const code = wrapper.querySelector('pre code');
+    const source = code ? code.textContent || '' : '';
+    const language = (wrapper.dataset.language || '').trim().split(/\s+/, 1)[0].toLowerCase();
+    let preview = mermaidWysiwygPreviews.get(wrapper);
+
+    if (!isMermaidSource(language, source)) {
+      if (preview) preview.remove();
+      mermaidWysiwygPreviews.delete(wrapper);
+      return;
+    }
+
+    const container = wrapper.closest('.toastui-editor-ww-container');
+    if (!container) return;
+    if (!preview) {
+      preview = document.createElement('div');
+      preview.className = 'mermaid-wysiwyg-preview';
+      preview.setAttribute('contenteditable', 'false');
+      preview.setAttribute('role', 'img');
+      preview.setAttribute('aria-label', 'Mermaid 图表');
+      container.appendChild(preview);
+      mermaidWysiwygPreviews.set(wrapper, preview);
+    }
+
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    preview.style.left = `${wrapperRect.left - containerRect.left + container.scrollLeft}px`;
+    preview.style.top = `${wrapperRect.top - containerRect.top + container.scrollTop}px`;
+    preview.style.width = `${wrapperRect.width}px`;
+    preview.style.height = `${wrapperRect.height}px`;
+
+    if (preview.mermaidSource !== source) {
+      preview.mermaidSource = source;
+      preview.innerHTML = '';
+      preview.style.backgroundImage = '';
+      preview.removeAttribute('data-mermaid-rendered');
+      preview.removeAttribute('data-mermaid-error');
+    }
+  });
+}
+
+function scheduleMermaidRender() {
+  if (mermaidRenderScheduled) return;
+  mermaidRenderScheduled = true;
+  setTimeout(() => {
+    mermaidRenderScheduled = false;
+    void renderMermaidDiagrams();
+  }, 0);
+}
+
+const mermaidDOMObserver = new MutationObserver(scheduleMermaidRender);
 
 window.api.onSystemOpenDocument((filePath) => {
   if (!editor) {
@@ -103,6 +267,7 @@ function createEditor(initialValue) {
     theme: currentTheme,
     initialValue: initialValue,
     plugins: [codeSyntaxHighlight],  // 代码语法高亮（含全部 prism 语言）
+    customHTMLRenderer: mermaidHTMLRenderer,
     toolbarItems: [
       ['heading', 'bold', 'italic', 'strike'],
       ['hr', 'quote'],
@@ -123,10 +288,16 @@ function createEditor(initialValue) {
         updateWordCount(md);
         setDirty(md !== lastSavedContent);
         if (!findPanelEl.hidden) updateFindCount();
+        scheduleMermaidRender();
       },
-      changeMode: (mode) => updateEditMode(mode)
+      changeMode: (mode) => {
+        updateEditMode(mode);
+        scheduleMermaidRender();
+      }
     }
   });
+  instance.on('afterPreviewRender', scheduleMermaidRender);
+  scheduleMermaidRender();
   return instance;
 }
 
@@ -862,6 +1033,15 @@ async function init() {
 
   editor = createEditor('');
   window.editor = editor;
+  mermaidDOMObserver.observe(document.getElementById('editor'), {
+    childList: true,
+    subtree: true,
+    characterData: true
+  });
+  // Mermaid 预览位于 ProseMirror 之外，滚动本身不会产生 DOM 变更；在捕获阶段
+  // 监听内部滚动，及时重新对齐预览层，避免图表与它覆盖的源码块分离。
+  document.getElementById('editor').addEventListener('scroll', scheduleMermaidRender, true);
+  window.addEventListener('resize', scheduleMermaidRender);
   updateEditMode(currentEditMode);
   updateWordCount(editor.getMarkdown());
   updateTitle();
