@@ -5,6 +5,8 @@
 const filenameEl = document.getElementById('filename');
 const statusInfoEl = document.getElementById('status-info');
 const wordCountEl = document.getElementById('word-count');
+const cursorPosEl = document.getElementById('cursor-pos');
+const zoomLevelEl = document.getElementById('zoom-level');
 const themeIconEl = document.getElementById('theme-icon');
 const dropOverlay = document.getElementById('drop-overlay');
 const documentBaseEl = document.getElementById('document-base');
@@ -514,6 +516,54 @@ function updateWordCount(md) {
   wordCountEl.textContent = `${text.length} 字`;
 }
 
+function updateCursorPos(pos) {
+  if (!cursorPosEl) return;
+  if (!pos) { cursorPosEl.textContent = ''; return; }
+  const { line, col } = pos;
+  cursorPosEl.textContent = `第${line}行 第${col}列`;
+}
+
+function updateZoomLevel(level) {
+  if (!zoomLevelEl) return;
+  zoomLevelEl.textContent = `${Math.round((1 + level * 0.1) * 100)}%`;
+}
+
+// 通过 ProseMirror view 追踪光标位置（编辑器聚焦时）
+function setupCursorTracker() {
+  if (!editor) return;
+  const el = document.getElementById('editor');
+  if (!el) return;
+  let rafId = 0;
+  const tick = () => {
+    rafId = requestAnimationFrame(() => {
+      // 获取 ProseMirror view（从 editor 实例上）
+      const pmView = editor._view || editor.view || editor.getMarkdown;
+      // 尝试通过 DOM 获取光标位置
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const mdContent = editor.getMarkdown();
+        const { line, col } = getLineColFromOffset(mdContent, range.startOffset);
+        updateCursorPos({ line, col });
+      }
+      tick();
+    });
+  };
+  tick();
+  // 清理：离开页面时停止
+  window.addEventListener('beforeunload', () => cancelAnimationFrame(rafId));
+}
+
+function getLineColFromOffset(text, offset) {
+  if (!text || offset < 0) return { line: 1, col: 1 };
+  let line = 1, col = 1;
+  for (let i = 0; i < offset && i < text.length; i++) {
+    if (text[i] === '\n') { line++; col = 1; }
+    else { col++; }
+  }
+  return { line, col };
+}
+
 let toastTimer = null;
 function toast(msg) {
   let el = document.querySelector('.toast');
@@ -870,6 +920,7 @@ window.api.onSystemThemeChanged((theme) => applyTheme(theme, true));
 window.api.onSaveBeforeClose(async () => {
   if (await saveFile(false)) window.api.closeAfterSave();
 });
+window.api.onZoomLevelChanged((level) => updateZoomLevel(level));
 
 // ============ 右键上下文菜单（类 Typora）============
 const MENU_ITEMS = [
@@ -1078,6 +1129,7 @@ async function init() {
   updateTitle();
   setStatus('已新建空白文档');
   setupContextMenu();
+  setupCursorTracker();
 
   try {
     const startupDocument = await window.api.takeStartupDocument();

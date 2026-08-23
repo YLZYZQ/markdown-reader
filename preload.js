@@ -36,5 +36,6 @@ contextBridge.exposeInMainWorld('api', {
   onSystemOpenDocument: (cb) => on('system:openDocument', cb),
 
   // 系统主题变化
-  onSystemThemeChanged: (cb) => on('theme:systemChanged', cb)
+  onSystemThemeChanged: (cb) => on('theme:systemChanged', cb),
+  onZoomLevelChanged: (cb) => on('zoom:levelChanged', cb)
 });

@@ -196,6 +196,17 @@ function createWindow() {
 
   void mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // 追踪缩放级别变化，通知渲染进程更新状态栏
+  mainWindow.webContents.on('zoom-commit', () => {
+    const level = mainWindow.webContents.getZoomLevel();
+    mainWindow.webContents.send('zoom:levelChanged', level);
+  });
+  // 初始化时发送当前缩放级别
+  setTimeout(() => {
+    const level = mainWindow.webContents.getZoomLevel();
+    mainWindow.webContents.send('zoom:levelChanged', level);
+  }, 500);
+
   // Toast UI Editor (ProseMirror) 将 Ctrl+S 绑定到删除线命令，会调用 preventDefault()
   // 在渲染进程中拦截菜单加速键分发。在 main 进程的 before-input-event 中提前拦截，
   // 将其转换为菜单保存命令（与点击菜单"保存"走同一条路径）。

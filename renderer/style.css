@@ -21,20 +21,20 @@ body.theme-light {
   --drop-border: #0969da;
 }
 
-/* 暗色主题 */
+/* 暗色主题（参照 Obsidian 调色） */
 body.theme-dark {
-  --bg: #1e1e1e;
+  --bg: #191919;
   --fg: #d4d4d4;
-  --muted: #9d9d9d;
-  --titlebar-bg: #252526;
-  --titlebar-border: #3c3c3c;
+  --muted: #6a6a6a;
+  --titlebar-bg: #202020;
+  --titlebar-border: #333333;
   --btn-bg: transparent;
-  --btn-bg-hover: #3a3d41;
-  --accent: #4aa3ff;
-  --statusbar-bg: #252526;
-  --statusbar-border: #3c3c3c;
-  --drop-bg: rgba(74, 163, 255, 0.15);
-  --drop-border: #4aa3ff;
+  --btn-bg-hover: #2a2a2a;
+  --accent: #7aa2f7;
+  --statusbar-bg: #1f1f1f;
+  --statusbar-border: #333333;
+  --drop-bg: rgba(122, 162, 247, 0.12);
+  --drop-border: #7aa2f7;
 }
 
 /* ============ 基础重置 ============ */
@@ -48,6 +48,8 @@ html, body {
   background: var(--bg);
   color: var(--fg);
   transition: background 0.25s ease, color 0.25s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 body {
   display: flex;
@@ -66,7 +68,7 @@ body {
   border-bottom: 1px solid var(--titlebar-border);
   -webkit-app-region: drag; /* 标题栏区域可拖动窗口 */
   user-select: none;
-  transition: background 0.25s ease, border-color 0.25s ease;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 .title-left {
   display: flex;
@@ -109,13 +111,14 @@ body {
   font-size: 13px;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.12s ease, transform 0.08s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  -webkit-app-region: no-drag;
 }
 .tb-btn:hover { background: var(--btn-bg-hover); }
-.tb-btn:active { transform: scale(0.96); }
+.tb-btn:active { transform: scale(0.95); }
 .icon-btn { width: 34px; padding: 0; }
 .mode-btn { min-width: 52px; padding: 0 10px; }
 .sidebar-toggle { -webkit-app-region: no-drag; font-size: 17px; }
@@ -254,6 +257,27 @@ body {
 
 /* ============ Toast UI Editor 适配 ============ */
 #editor { height: 100%; }
+
+/* 平滑滚动 */
+.toastui-editor-ww-container,
+.toastui-editor-ww-container .ProseMirror {
+  scroll-behavior: smooth;
+}
+
+/* 编辑器滚动条更精致 */
+.toastui-editor-ww-container::-webkit-scrollbar,
+.toastui-editor-md-preview::-webkit-scrollbar {
+  width: 8px;
+}
+.toastui-editor-ww-container::-webkit-scrollbar-thumb,
+.toastui-editor-md-preview::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 4px;
+}
+.toastui-editor-ww-container::-webkit-scrollbar-thumb:hover,
+.toastui-editor-md-preview::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.45);
+}
 
 .toastui-editor-md-preview .mermaid-diagram {
   box-sizing: border-box;
@@ -413,7 +437,12 @@ body.theme-light .toastui-editor-main .ProseMirror {
   font-size: 11.5px;
   color: var(--muted);
   user-select: none;
-  transition: background 0.25s ease, border-color 0.25s ease;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.status-left, .status-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 .word-count { font-variant-numeric: tabular-nums; }
 
@@ -445,12 +474,13 @@ body.theme-light .toastui-editor-main .ProseMirror {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.35);
+  background: rgba(128, 128, 128, 0.3);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
+  transition: background 0.15s ease;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.55); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.5); background-clip: padding-box; }
 
 /* ============ 对话框/提示 ============ */
 .toast {
