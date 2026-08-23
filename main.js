@@ -196,6 +196,16 @@ function createWindow() {
 
   void mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Toast UI Editor (ProseMirror) 将 Ctrl+S 绑定到删除线命令，会调用 preventDefault()
+  // 在渲染进程中拦截菜单加速键分发。在 main 进程的 before-input-event 中提前拦截，
+  // 将其转换为菜单保存命令（与点击菜单"保存"走同一条路径）。
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 's' && input.control && !input.shift && !input.alt && !input.meta) {
+      _event.preventDefault();
+      mainWindow.webContents.send('menu:save');
+    }
+  });
+
   mainWindow.once('ready-to-show', () => mainWindow && mainWindow.show());
   mainWindow.on('close', (event) => {
     if (allowWindowClose || !isDocumentDirty) return;
@@ -357,7 +367,7 @@ function buildMenu() {
       submenu: [
         { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => sendCommand('new') },
         { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => mainWindow?.webContents.send('menu:open') },
-        { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => mainWindow?.webContents.send('menu:save') },
+        { label: '保存', click: () => mainWindow?.webContents.send('menu:save') },
         { label: '另存为…', accelerator: 'CmdOrCtrl+Shift+S', click: () => mainWindow?.webContents.send('menu:saveAs') },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit', label: '退出' }
@@ -447,7 +457,7 @@ function buildMenu() {
             detail: [
               '打开文档：双击 .md 文件、右键“使用 Markdown阅读器打开”、Ctrl+O 或拖拽文件。',
               '新建文档：直接双击阅读器程序，或按 Ctrl+N。',
-              '保存：Ctrl+S 保存，Ctrl+Shift+S 另存为。',
+              '保存：Ctrl+S 保存（由快捷键拦截实现），Ctrl+Shift+S 另存为。',
               '文件侧边栏：显示当前文档目录，点击文件切换；按 Ctrl+Shift+E 可收起或展开。',
               '编辑：Ctrl+/ 切换源码和所见即所得，Ctrl+F 查找，Ctrl+H 替换。',
               '主题：Ctrl+Shift+T 切换亮色和暗色主题。',

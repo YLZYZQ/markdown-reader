@@ -283,35 +283,38 @@ body {
   white-space: pre-wrap;
 }
 
-.toastui-editor-ww-container {
+.toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block {
   position: relative;
-}
-
-.mermaid-wysiwyg-preview {
-  position: absolute;
-  /* Toast UI gives the ProseMirror contents a stacking level of 20. Keep the
-     visual-only diagram above it while leaving its code-block contentDOM intact. */
-  z-index: 21;
   box-sizing: border-box;
   padding: 16px;
-  pointer-events: auto;
-  user-select: none;
   background-color: var(--editor-bg, #fff);
   border: 1px solid rgba(127, 127, 127, 0.2);
   border-radius: 6px;
 }
 
-.mermaid-wysiwyg-preview svg {
+.toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block > pre {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block .mermaid-wysiwyg-preview {
+  position: relative;
+  min-height: 80px;
+}
+
+.toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block .mermaid-wysiwyg-preview svg {
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
+  max-width: none;
 }
 
-.toastui-editor-ww-code-block-highlighting[data-language="mermaid"] > pre {
-  min-height: 160px;
-}
-
-.theme-dark .mermaid-wysiwyg-preview {
+.theme-dark .toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block {
   background-color: #121212;
 }
 #editor .toastui-editor-defaultUI {

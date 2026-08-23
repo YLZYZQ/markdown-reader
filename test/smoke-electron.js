@@ -224,7 +224,9 @@ app.whenReady().then(async () => {
       '\`\`\`markup',
       'flowchart LR',
       'C[兼容旧文档] --> D[完成渲染]',
-      '\`\`\`'
+      '\`\`\`',
+      '',
+      '渲染后的正文'
     ].join('\\n');
     window.editor.setMarkdown(mermaidMarkdown, false);
     for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -260,23 +262,25 @@ app.whenReady().then(async () => {
       sourceCodeCount: document.querySelectorAll(
         '.toastui-editor-ww-code-block-highlighting > pre code'
       ).length,
+      wrapperContainsSvg: Array.from(document.querySelectorAll('.mermaid-wysiwyg-preview svg'))
+        .every((svg) => svg.closest('.mermaid-wysiwyg-code-block')?.contains(svg)),
+      aspectRatioStable: Array.from(
+        document.querySelectorAll('.mermaid-wysiwyg-preview svg')
+      ).every((svg) => {
+        const box = svg.viewBox.baseVal;
+        const rect = svg.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && rect.width > 0 && rect.height > 0 &&
+          Math.abs(rect.width / rect.height - box.width / box.height) < 0.02;
+      }),
+      followingContentNotCovered: (() => {
+        const paragraph = Array.from(document.querySelectorAll('.toastui-editor-ww-container .ProseMirror p'))
+          .find((element) => element.textContent === '渲染后的正文');
+        const bottom = Math.max(...Array.from(document.querySelectorAll('.mermaid-wysiwyg-preview'), (element) =>
+          element.getBoundingClientRect().bottom
+        ));
+        return Boolean(paragraph) && paragraph.getBoundingClientRect().top >= bottom - 1;
+      })(),
       markdown: window.editor.getMarkdown()
-    });
-    const wysiwygScroll = document.querySelector('.toastui-editor-ww-container .ProseMirror');
-    wysiwygScroll.scrollTop = 80;
-    wysiwygScroll.dispatchEvent(new Event('scroll'));
-    await wait(100);
-    mermaidState.scrollAligned = Array.from(
-      document.querySelectorAll('.toastui-editor-ww-code-block-highlighting')
-    ).every((wrapper) => {
-      const preview = Array.from(document.querySelectorAll('.mermaid-wysiwyg-preview'))
-        .find((element) => {
-          const wrapperRect = wrapper.getBoundingClientRect();
-          const previewRect = element.getBoundingClientRect();
-          return Math.abs(wrapperRect.top - previewRect.top) < 1 &&
-            Math.abs(wrapperRect.left - previewRect.left) < 1;
-        });
-      return Boolean(preview);
     });
     window.editor.changeMode('markdown');
     for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -321,7 +325,9 @@ app.whenReady().then(async () => {
   if (
     state.mermaidState.svgCount !== 2 ||
     state.mermaidState.visiblePreviewCount !== 2 ||
-    !state.mermaidState.scrollAligned ||
+    !state.mermaidState.wrapperContainsSvg ||
+    !state.mermaidState.aspectRatioStable ||
+    !state.mermaidState.followingContentNotCovered ||
     state.mermaidState.sourcePreviewSvgCount !== 2 ||
     state.mermaidState.previewSvgCount !== 2 ||
     state.mermaidState.sourceCodeCount !== 2 ||

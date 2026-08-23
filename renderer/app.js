@@ -51,8 +51,6 @@ let mermaidRenderScheduled = false;
 let mermaidRenderRunning = false;
 let mermaidRenderRequested = false;
 let mermaidDiagramId = 0;
-const mermaidWysiwygPreviews = new Map();
-
 function isMermaidCodeBlock(node) {
   const language = (node.info || '').trim().split(/\s+/, 1)[0].toLowerCase();
   return isMermaidSource(language, node.literal || '');
@@ -64,6 +62,101 @@ function isMermaidSource(language, source) {
   // Toast UI 新建代码块时默认使用 markup。对明显的 Mermaid 流程图兼容识别，
   // 这样旧文档无需逐个修改围栏语言；其他 markup 代码仍按普通代码显示。
   return language === 'markup' && /^\s*(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b/i.test(source);
+}
+
+class MermaidCodeBlockView {
+  constructor(node) {
+    this.node = node;
+    this.renderToken = 0;
+    this.createElement();
+    this.render();
+  }
+
+  createElement() {
+    const language = this.node.attrs.language || 'mermaid';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'toastui-editor-ww-code-block-highlighting mermaid-wysiwyg-code-block';
+    wrapper.setAttribute('data-language', language);
+
+    const pre = document.createElement('pre');
+    pre.className = `language-${language}`;
+    const code = document.createElement('code');
+    code.setAttribute('data-language', language);
+    pre.appendChild(code);
+
+    const preview = document.createElement('div');
+    preview.className = 'mermaid-wysiwyg-preview';
+    preview.setAttribute('contenteditable', 'false');
+    preview.setAttribute('role', 'img');
+    preview.setAttribute('aria-label', 'Mermaid 图表');
+
+    wrapper.append(pre, preview);
+    this.dom = wrapper;
+    this.contentDOM = code;
+    this.preview = preview;
+  }
+
+  async render() {
+    const source = this.node.textContent;
+    const token = ++this.renderToken;
+    this.preview.replaceChildren();
+    this.preview.dataset.mermaidRendering = 'true';
+    try {
+      configureMermaid();
+      const { svg, bindFunctions } = await mermaid.render(`mermaid-wysiwyg-${++mermaidDiagramId}`, source);
+      if (token !== this.renderToken || !this.preview.isConnected) return;
+      this.preview.innerHTML = svg;
+      this.preview.dataset.mermaidRendered = 'true';
+      this.preview.removeAttribute('data-mermaid-rendering');
+      this.preview.removeAttribute('data-mermaid-error');
+      if (bindFunctions) bindFunctions(this.preview);
+    } catch (error) {
+      if (token !== this.renderToken || !this.preview.isConnected) return;
+      this.preview.textContent = `Mermaid 图表语法错误\n${source}`;
+      this.preview.dataset.mermaidRendered = 'true';
+      this.preview.dataset.mermaidError = 'true';
+      this.preview.removeAttribute('data-mermaid-rendering');
+      console.warn('Mermaid 图表渲染失败:', error);
+    }
+  }
+
+  update(node) {
+    if (!node.sameMarkup(this.node)) return false;
+    const changed = node.textContent !== this.node.textContent;
+    this.node = node;
+    if (changed) this.render();
+    return true;
+  }
+
+  stopEvent() { return true; }
+
+  ignoreMutation(mutation) {
+    const target = mutation.target.nodeType === Node.ELEMENT_NODE
+      ? mutation.target
+      : mutation.target.parentElement;
+    // ProseMirror 只需要观察 contentDOM 的源码文本；SVG 异步插入是 NodeView
+    // 自己的展示状态，不能据此重建整个代码块。
+    return Boolean(target && !this.contentDOM.contains(target));
+  }
+
+  destroy() { this.renderToken += 1; }
+}
+
+function mermaidCodeSyntaxHighlight(context) {
+  const baseInfo = codeSyntaxHighlight(context);
+  const baseCodeBlockView = baseInfo.wysiwygNodeViews.codeBlock;
+  return {
+    ...baseInfo,
+    wysiwygNodeViews: {
+      ...baseInfo.wysiwygNodeViews,
+      codeBlock(node, view, getPos, eventEmitter) {
+        const language = (node.attrs.language || '').trim().split(/\s+/, 1)[0].toLowerCase();
+        return isMermaidSource(language, node.textContent)
+          ? new MermaidCodeBlockView(node, view, getPos, eventEmitter)
+          : baseCodeBlockView(node, view, getPos, eventEmitter);
+      }
+    }
+  };
 }
 
 const mermaidHTMLRenderer = {
@@ -94,15 +187,13 @@ function configureMermaid() {
 }
 
 async function renderMermaidDiagrams() {
-  prepareWysiwygMermaidDiagrams();
   if (mermaidRenderRunning) {
     mermaidRenderRequested = true;
     return;
   }
 
   const diagrams = Array.from(document.querySelectorAll(
-    '.toastui-editor-md-preview .mermaid-diagram:not([data-mermaid-rendered]), ' +
-    '.mermaid-wysiwyg-preview:not([data-mermaid-rendered])'
+    '.toastui-editor-md-preview .mermaid-diagram:not([data-mermaid-rendered])'
   ));
   if (!diagrams.length) return;
 
@@ -110,33 +201,20 @@ async function renderMermaidDiagrams() {
   configureMermaid();
   for (const diagram of diagrams) {
     if (!diagram.isConnected || diagram.dataset.mermaidRendering === 'true') continue;
-    const isWysiwygDiagram = diagram.classList.contains('mermaid-wysiwyg-preview');
-    const source = isWysiwygDiagram ? diagram.mermaidSource || '' : diagram.textContent || '';
+    const source = diagram.textContent || '';
     diagram.dataset.mermaidRendering = 'true';
     try {
       const id = `mermaid-diagram-${++mermaidDiagramId}`;
       const { svg, bindFunctions } = await mermaid.render(id, source);
       if (!diagram.isConnected) continue;
-      if (isWysiwygDiagram) {
-        // 直接插入 SVG，而不是将其编码为 CSS 背景。复杂图的 SVG 含有大量
-        // CSS 选择器；作为 data URL 时 Chromium 在从源码模式切换后可能不绘制它。
-        diagram.innerHTML = svg;
-        diagram.setAttribute('role', 'img');
-        diagram.setAttribute('aria-label', 'Mermaid 图表');
-      } else {
-        diagram.innerHTML = svg;
-      }
+      diagram.innerHTML = svg;
       diagram.dataset.mermaidRendered = 'true';
       diagram.removeAttribute('data-mermaid-rendering');
       diagram.removeAttribute('data-mermaid-error');
       if (bindFunctions) bindFunctions(diagram);
     } catch (error) {
       if (!diagram.isConnected) continue;
-      if (!isWysiwygDiagram) diagram.textContent = source;
-      else {
-        diagram.style.backgroundImage = '';
-        diagram.textContent = `Mermaid 图表语法错误\n${source}`;
-      }
+      diagram.textContent = source;
       diagram.dataset.mermaidRendered = 'true';
       diagram.dataset.mermaidError = 'true';
       diagram.removeAttribute('data-mermaid-rendering');
@@ -149,55 +227,6 @@ async function renderMermaidDiagrams() {
     mermaidRenderRequested = false;
     scheduleMermaidRender();
   }
-}
-
-function prepareWysiwygMermaidDiagrams() {
-  for (const [wrapper, preview] of mermaidWysiwygPreviews) {
-    if (!wrapper.isConnected || !preview.isConnected) {
-      preview.remove();
-      mermaidWysiwygPreviews.delete(wrapper);
-    }
-  }
-
-  document.querySelectorAll('.toastui-editor-ww-code-block-highlighting').forEach((wrapper) => {
-    const code = wrapper.querySelector('pre code');
-    const source = code ? code.textContent || '' : '';
-    const language = (wrapper.dataset.language || '').trim().split(/\s+/, 1)[0].toLowerCase();
-    let preview = mermaidWysiwygPreviews.get(wrapper);
-
-    if (!isMermaidSource(language, source)) {
-      if (preview) preview.remove();
-      mermaidWysiwygPreviews.delete(wrapper);
-      return;
-    }
-
-    const container = wrapper.closest('.toastui-editor-ww-container');
-    if (!container) return;
-    if (!preview) {
-      preview = document.createElement('div');
-      preview.className = 'mermaid-wysiwyg-preview';
-      preview.setAttribute('contenteditable', 'false');
-      preview.setAttribute('role', 'img');
-      preview.setAttribute('aria-label', 'Mermaid 图表');
-      container.appendChild(preview);
-      mermaidWysiwygPreviews.set(wrapper, preview);
-    }
-
-    const wrapperRect = wrapper.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    preview.style.left = `${wrapperRect.left - containerRect.left + container.scrollLeft}px`;
-    preview.style.top = `${wrapperRect.top - containerRect.top + container.scrollTop}px`;
-    preview.style.width = `${wrapperRect.width}px`;
-    preview.style.height = `${wrapperRect.height}px`;
-
-    if (preview.mermaidSource !== source) {
-      preview.mermaidSource = source;
-      preview.innerHTML = '';
-      preview.style.backgroundImage = '';
-      preview.removeAttribute('data-mermaid-rendered');
-      preview.removeAttribute('data-mermaid-error');
-    }
-  });
 }
 
 function scheduleMermaidRender() {
@@ -266,7 +295,7 @@ function createEditor(initialValue) {
     language: 'zh-CN',               // 中文界面
     theme: currentTheme,
     initialValue: initialValue,
-    plugins: [codeSyntaxHighlight],  // 代码语法高亮（含全部 prism 语言）
+    plugins: [mermaidCodeSyntaxHighlight],  // Mermaid NodeView + 其他代码块 Prism 高亮
     customHTMLRenderer: mermaidHTMLRenderer,
     toolbarItems: [
       ['heading', 'bold', 'italic', 'strike'],
@@ -293,6 +322,8 @@ function createEditor(initialValue) {
       changeMode: (mode) => {
         updateEditMode(mode);
         scheduleMermaidRender();
+        // Toast UI 在 changeMode 通知后仍会完成一次 code-block NodeView 更新。
+        setTimeout(scheduleMermaidRender, 80);
       }
     }
   });
