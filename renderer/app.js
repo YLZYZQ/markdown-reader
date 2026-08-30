@@ -296,6 +296,7 @@ function createEditor(initialValue) {
         updateEditMode(mode);
         updateCaretStatus();
         scheduleMermaidRender();
+        hideMatchHighlight();
         // Toast UI 在 changeMode 通知后仍会完成一次 code-block NodeView 更新。
         setTimeout(scheduleMermaidRender, 80);
       }
@@ -332,6 +333,7 @@ function rebuildEditor() {
   editor = createEditor(md);
   window.editor = editor;
   setDirty(wasDirty);
+  hideMatchHighlight();
   if (selection) {
     try {
       // getSelection/setSelection 在同一模式下格式一致（源码 [行,列]，所见即所得偏移量）。
@@ -1001,8 +1003,9 @@ function modePositionForIndex(visible, index) {
 }
 
 // 高亮第 n 个匹配：源码模式用 [行, 列]，所见即所得模式用文档偏移量。
-// Toast UI 的 setSelection 两种模式自带 scrollIntoView，但焦点在查找输入框
-// （编辑器未聚焦）时 ProseMirror 不会滚动，因此高亮后需手动滚入视区。
+// 焦点在查找输入框（编辑器未聚焦）时 ProseMirror 既不滚动也不同步选区高亮，
+// 因此：① 手动滚入视区；② 用独立高亮框标记匹配位置（不占用 DOM 选区，
+// 不改变焦点，Enter 可连续查找）。
 function highlightMatch(visible, match) {
   const startIndex = match.index;
   const endIndex = match.index + Math.max(match.length, 1);
@@ -1014,6 +1017,7 @@ function highlightMatch(visible, match) {
     editor.setSelection(modePositionForIndex(visible, startIndex), modePositionForIndex(visible, endIndex));
   }
   scrollEditorSelectionIntoView();
+  showMatchHighlight();
 }
 
 // 把当前 PM 选区滚动到编辑器可视区约 1/3 高度处（已可见则不动）。
@@ -1037,6 +1041,64 @@ function scrollEditorSelectionIntoView() {
     if (coords.top >= rect.top && coords.bottom <= rect.bottom) return; // 已在可视区
     scroller.scrollTop += coords.top - rect.top - rect.height * 0.35;
   } catch (_) { /* 滚动失败不影响查找结果 */ }
+}
+
+// ============ 查找匹配高亮框 ============
+// 浏览器只绘制焦点元素内的选区；焦点在查找面板时编辑器选区不可见，
+// 因此用独立的覆盖层标记当前匹配（不改变焦点，Enter 可连续查找）。
+let matchHighlightLayer = null;
+let matchHighlightActive = false;
+
+function hideMatchHighlight() {
+  matchHighlightActive = false;
+  if (matchHighlightLayer) matchHighlightLayer.replaceChildren();
+}
+
+// 依据当前 PM 选区绘制高亮框（跨行匹配按行拆成多个矩形）。
+function showMatchHighlight() {
+  let view = null;
+  try {
+    view = editor.getCurrentModeEditor().view;
+  } catch (_) { return; }
+  if (!view || !view.dom) { hideMatchHighlight(); return; }
+  try {
+    const { from, to } = view.state.selection;
+    if (to <= from) { hideMatchHighlight(); return; }
+    const startPos = view.domAtPos(from);
+    const endPos = view.domAtPos(to);
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    const rects = Array.from(range.getClientRects()).filter(
+      (rect) => rect.width > 0 && rect.height > 0
+    ).slice(0, 40);
+    if (!rects.length) { hideMatchHighlight(); return; }
+
+    if (!matchHighlightLayer) {
+      matchHighlightLayer = document.createElement('div');
+      matchHighlightLayer.className = 'match-highlight-layer';
+      document.body.appendChild(matchHighlightLayer);
+    }
+    matchHighlightLayer.replaceChildren();
+    for (const rect of rects) {
+      const box = document.createElement('div');
+      box.className = 'match-highlight-box';
+      box.style.left = `${rect.left - 2}px`;
+      box.style.top = `${rect.top}px`;
+      box.style.width = `${rect.width + 4}px`;
+      box.style.height = `${rect.height}px`;
+      matchHighlightLayer.appendChild(box);
+    }
+    matchHighlightLayer.style.display = 'block';
+    matchHighlightActive = true;
+  } catch (_) {
+    hideMatchHighlight();
+  }
+}
+
+// 覆盖层用 fixed 定位，滚动/缩放后需按当前选区重算位置。
+function repositionMatchHighlight() {
+  if (matchHighlightActive) showMatchHighlight();
 }
 
 function updateFindCount() {
@@ -1066,6 +1128,7 @@ function showFindPanel(replaceMode = false) {
 
 function closeFindPanel() {
   findPanelEl.hidden = true;
+  hideMatchHighlight();
   editor.focus();
 }
 
@@ -1226,7 +1289,10 @@ document.getElementById('btn-find-next').addEventListener('click', () => findInE
 document.getElementById('btn-find-close').addEventListener('click', closeFindPanel);
 document.getElementById('btn-replace').addEventListener('click', replaceCurrentMatch);
 document.getElementById('btn-replace-all').addEventListener('click', replaceAllMatches);
-findInputEl.addEventListener('input', updateFindCount);
+findInputEl.addEventListener('input', () => {
+  hideMatchHighlight();
+  updateFindCount();
+});
 caseSensitiveEl.addEventListener('change', updateFindCount);
 findInputEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
@@ -1525,6 +1591,9 @@ async function init() {
   // Mermaid 预览位于 ProseMirror 之外，滚动本身不会产生 DOM 变更；在捕获阶段
   // 监听内部滚动，及时重新对齐预览层，避免图表与它覆盖的源码块分离。
   document.getElementById('editor').addEventListener('scroll', scheduleMermaidRender, true);
+  // 查找高亮框为 fixed 定位，滚动/缩放后重算位置。
+  document.getElementById('editor').addEventListener('scroll', repositionMatchHighlight, true);
+  window.addEventListener('resize', repositionMatchHighlight);
   window.addEventListener('resize', scheduleMermaidRender);
   updateEditMode(currentEditMode);
   updateWordCount(editor.getMarkdown());

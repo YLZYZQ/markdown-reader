@@ -447,6 +447,11 @@ body.theme-light .toastui-editor-main .ProseMirror {
 }
 
 /* ============ 阅读排版优化 ============ */
+/* 查找高亮：编辑器未聚焦（焦点在查找面板）时选区默认不着色，显式给色 */
+.toastui-editor .ProseMirror ::selection,
+.toastui-editor .ProseMirror::selection {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
 /* 阅读列宽：过长的行大幅拉低可读性；以 em 为单位随用户字号设置缩放 */
 .toastui-editor-contents {
   max-width: 48em;
@@ -525,6 +530,21 @@ body.theme-light .toastui-editor-main .ProseMirror {
   pointer-events: auto;
 }
 .code-block-copy-btn:hover { background: var(--btn-bg-hover); color: var(--fg); }
+
+/* ============ 查找匹配高亮框 ============ */
+.match-highlight-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  pointer-events: none;
+  display: none;
+}
+.match-highlight-box {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
 
 /* ============ 查找与替换 ============ */
 .find-panel {

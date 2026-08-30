@@ -367,6 +367,7 @@ app.whenReady().then(async () => {
     delete jumpScroller.scrollTop;
     rootResults.findJumpWrites = jumpWrites.length;
     rootResults.findScrolled = jumpWrites.some((v) => v > 1000);
+    rootResults.findHighlightBoxes = document.querySelectorAll('.match-highlight-box').length;
     document.getElementById('btn-find-close').click();
 
     // —— 回归 v1.4：代码块复制按钮（悬浮式，mouseover 定位到 ww 代码块） ——
@@ -634,6 +635,7 @@ app.whenReady().then(async () => {
     root.copyButtonFeedback === '已复制' &&
     root.clipboardText === 'const answer = 42;' &&
     root.findScrolled === true &&
+    root.findHighlightBoxes >= 1 &&
     root.fontSizeVar === '20px' &&
     root.fontFamilyVar === 'Consolas, "Courier New", monospace' &&
     root.fontPrefPatches === true &&
