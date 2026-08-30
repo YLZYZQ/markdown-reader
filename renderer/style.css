@@ -452,13 +452,21 @@ body.theme-light .toastui-editor-main .ProseMirror {
 .toastui-editor .ProseMirror::selection {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
-/* 阅读列宽：过长的行大幅拉低可读性；以 em 为单位随用户字号设置缩放 */
+/* 阅读列宽：过长的行大幅拉低可读性；以 em 为单位随用户字号设置缩放。
+   注意必须用显式 width（而非 max-width）+ auto 边距，否则不会居中。 */
 .toastui-editor-contents {
-  max-width: 48em;
+  width: min(48em, 100%);
   margin-inline: auto;
   padding: 16px 40px 72px;
   line-height: 1.8;
   word-break: break-word;
+}
+/* 所见即所得模式：Toast UI 用 (0,2,0) 的规则设了 margin:0 和自己的 padding，
+   必须用同等优先级的选择器覆盖，否则居中失效（列贴左侧、右侧大片留白）。 */
+.toastui-editor-ww-container .toastui-editor-contents {
+  width: min(48em, 100%);
+  margin-inline: auto;
+  padding: 16px 40px 72px;
 }
 /* 段落与标题 */
 .toastui-editor-contents p { margin: 0.4em 0; }
