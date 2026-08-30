@@ -17,6 +17,9 @@ body.theme-light {
   --accent: #0969da;
   --statusbar-bg: #f6f8fa;
   --statusbar-border: #d0d7de;
+  --editor-bg: #ffffff;
+  --overlay-border: #c7cdd4;
+  --overlay-shadow: 0 8px 28px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.08);
   --drop-bg: rgba(9, 105, 218, 0.12);
   --drop-border: #0969da;
 }
@@ -25,7 +28,7 @@ body.theme-light {
 body.theme-dark {
   --bg: #191919;
   --fg: #d4d4d4;
-  --muted: #6a6a6a;
+  --muted: #9a9a9a;
   --titlebar-bg: #202020;
   --titlebar-border: #333333;
   --btn-bg: transparent;
@@ -33,6 +36,9 @@ body.theme-dark {
   --accent: #7aa2f7;
   --statusbar-bg: #1f1f1f;
   --statusbar-border: #333333;
+  --editor-bg: #121212;
+  --overlay-border: #454545;
+  --overlay-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
   --drop-bg: rgba(122, 162, 247, 0.12);
   --drop-border: #7aa2f7;
 }
@@ -242,18 +248,99 @@ body {
 .tree-directory[open] > summary::before { transform: rotate(90deg); }
 .tree-directory > summary:hover,
 .tree-file:hover { background: var(--btn-bg-hover); color: var(--fg); }
+.tree-directory > summary:focus-visible,
+.tree-file:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
 .tree-children {
   margin-left: 10px;
   padding-left: 5px;
   border-left: 1px solid color-mix(in srgb, var(--titlebar-border) 72%, transparent);
 }
 .tree-file.active {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
   font-weight: 600;
 }
 .tree-icon { flex: 0 0 15px; width: 15px; text-align: center; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
+
+/* ============ 侧边栏 Tab（文件 | 大纲） ============ */
+.sidebar-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 5px 8px 0;
+  border-bottom: 1px solid var(--titlebar-border);
+  min-width: var(--sidebar-w);
+}
+.sidebar-tab {
+  flex: 1;
+  height: 26px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.sidebar-tab:hover { background: var(--btn-bg-hover); color: var(--fg); }
+.sidebar-tab.active {
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+#outline-panel {
+  flex: 1;
+  min-width: var(--sidebar-w);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.outline-list {
+  flex: 1;
+  overflow: auto;
+  padding: 7px 5px 12px;
+  user-select: none;
+}
+.outline-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+.outline-item:hover { background: var(--btn-bg-hover); }
+.outline-item.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.outline-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.outline-level {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.outline-item.active .outline-level { color: var(--accent); }
 
 /* ============ Toast UI Editor 适配 ============ */
 #editor { height: 100%; }
@@ -286,7 +373,7 @@ body {
   padding: 16px;
   overflow: auto;
   text-align: center;
-  background: var(--editor-bg, #fff);
+  background: var(--editor-bg);
   border: 1px solid rgba(127, 127, 127, 0.2);
   border-radius: 6px;
 }
@@ -311,7 +398,7 @@ body {
   position: relative;
   box-sizing: border-box;
   padding: 16px;
-  background-color: var(--editor-bg, #fff);
+  background-color: var(--editor-bg);
   border: 1px solid rgba(127, 127, 127, 0.2);
   border-radius: 6px;
 }
@@ -338,9 +425,6 @@ body {
   max-width: none;
 }
 
-.theme-dark .toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block {
-  background-color: #121212;
-}
 #editor .toastui-editor-defaultUI {
   border: none !important;
   border-radius: 0 !important;
@@ -364,9 +448,9 @@ body.theme-light .toastui-editor-main .ProseMirror {
   width: min(620px, calc(100vw - 32px));
   padding: 8px;
   background: var(--titlebar-bg);
-  border: 1px solid var(--titlebar-border);
+  border: 1px solid var(--overlay-border);
   border-radius: 9px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--overlay-shadow);
   color: var(--fg);
 }
 .find-panel[hidden] { display: none; }
@@ -400,6 +484,8 @@ body.theme-light .toastui-editor-main .ProseMirror {
   text-align: center;
   white-space: nowrap;
 }
+.find-count.no-result { color: #d1242f; font-weight: 600; }
+body.theme-dark .find-count.no-result { color: #f85149; }
 .find-icon-btn,
 .find-action-btn {
   height: 28px;
@@ -444,6 +530,12 @@ body.theme-light .toastui-editor-main .ProseMirror {
   align-items: center;
   gap: 14px;
 }
+/* 状态栏右侧信息之间的细分隔点（相邻两项都非空才显示） */
+.status-right > span:not(:empty) + span:not(:empty)::before {
+  content: "·";
+  margin-right: 12px;
+  opacity: 0.55;
+}
 .word-count { font-variant-numeric: tabular-nums; }
 
 /* ============ 拖拽遮罩 ============ */
@@ -461,8 +553,8 @@ body.theme-light .toastui-editor-main .ProseMirror {
 .drop-overlay.active { display: flex; }
 .drop-inner {
   border: 2px dashed var(--drop-border);
-  border-radius: 16px;
-  padding: 48px 64px;
+  border-radius: 12px;
+  padding: 36px 52px;
   text-align: center;
   color: var(--accent);
   font-size: 16px;
@@ -508,9 +600,9 @@ body.theme-light .toastui-editor-main .ProseMirror {
   min-width: 200px;
   padding: 6px 0;
   background: var(--bg);
-  border: 1px solid var(--titlebar-border);
+  border: 1px solid var(--overlay-border);
   border-radius: 8px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--overlay-shadow);
   font-size: 13px;
   user-select: none;
   color: var(--fg);

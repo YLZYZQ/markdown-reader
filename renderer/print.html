@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self';
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' file: data: blob:;
+                 font-src 'self' data:;
+                 connect-src 'none';
+                 object-src 'none';
+                 base-uri 'none';
+                 form-action 'none';" />
+  <title>打印视图</title>
+  <link rel="stylesheet" href="tui-editor/toastui-editor.css" />
+  <link rel="stylesheet" href="tui-editor/toastui-editor-plugin-code-syntax-highlight.css" />
+  <link rel="stylesheet" href="tui-editor/prism.css" />
+  <link rel="stylesheet" href="print.css" />
+</head>
+<body>
+  <div id="print-editor"></div>
+  <script src="tui-editor/editor-bundle.js"></script>
+  <script src="../lib/mermaid-html-renderer.js"></script>
+  <script src="print.js"></script>
+</body>
+</html>

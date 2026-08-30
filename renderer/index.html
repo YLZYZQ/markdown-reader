@@ -21,6 +21,8 @@
   <link rel="stylesheet" href="tui-editor/toastui-editor-plugin-code-syntax-highlight.css" />
   <link rel="stylesheet" href="tui-editor/prism.css" />
   <script src="tui-editor/editor-bundle.js"></script>
+  <script src="../lib/outline.js"></script>
+  <script src="../lib/mermaid-html-renderer.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="theme-light">
@@ -54,8 +56,17 @@
         </div>
         <button id="btn-sidebar-refresh" class="sidebar-action" title="刷新目录" aria-label="刷新目录">↻</button>
       </div>
-      <div id="file-tree" class="file-tree">
+      <nav class="sidebar-tabs" role="tablist" aria-label="侧边栏视图">
+        <button id="tab-files" class="sidebar-tab active" type="button" role="tab" aria-selected="true">文件</button>
+        <button id="tab-outline" class="sidebar-tab" type="button" role="tab" aria-selected="false">大纲</button>
+      </nav>
+      <div id="file-tree" class="file-tree" role="tabpanel" aria-label="文件列表">
         <div class="sidebar-empty">打开或保存文档后，将显示同目录下的文件。</div>
+      </div>
+      <div id="outline-panel" class="outline-panel" role="tabpanel" aria-label="文档大纲" hidden>
+        <div id="outline-list" class="outline-list">
+          <div class="sidebar-empty">当前文档没有标题。</div>
+        </div>
       </div>
     </aside>
     <div id="editor"></div>

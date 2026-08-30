@@ -59,8 +59,11 @@ try {
 
   fs.mkdirSync(releaseDir, { recursive: true });
   fs.rmSync(artifactPath, { force: true });
+  // 必须用 Windows 自带的 bsdtar：Git Bash 环境下 PATH 里的 MSYS GNU tar
+  // 会把 `C:\...` 参数解析成远程主机（报 "Cannot connect to C:"）。
+  const systemTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
   const result = spawnSync(
-    'tar.exe',
+    systemTar,
     ['-a', '-c', '-f', artifactPath, '-C', temporaryRoot, 'MarkdownReader'],
     { stdio: 'inherit' },
   );

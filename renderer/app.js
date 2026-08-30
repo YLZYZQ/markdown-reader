@@ -21,6 +21,10 @@ const fileTreeEl = document.getElementById('file-tree');
 const sidebarRootEl = document.getElementById('sidebar-root');
 const sidebarButtonEl = document.getElementById('btn-sidebar');
 const sidebarRefreshButtonEl = document.getElementById('btn-sidebar-refresh');
+const tabFilesEl = document.getElementById('tab-files');
+const tabOutlineEl = document.getElementById('tab-outline');
+const outlinePanelEl = document.getElementById('outline-panel');
+const outlineListEl = document.getElementById('outline-list');
 
 // 后续会把 <base> 指向当前文档目录；先固定应用自身样式资源的绝对地址。
 document.querySelectorAll('link[href]').forEach((link) => link.setAttribute('href', link.href));
@@ -53,18 +57,6 @@ let mermaidRenderScheduled = false;
 let mermaidRenderRunning = false;
 let mermaidRenderRequested = false;
 let mermaidDiagramId = 0;
-function isMermaidCodeBlock(node) {
-  const language = (node.info || '').trim().split(/\s+/, 1)[0].toLowerCase();
-  return isMermaidSource(language, node.literal || '');
-}
-
-function isMermaidSource(language, source) {
-  if (language === 'mermaid') return true;
-
-  // Toast UI 新建代码块时默认使用 markup。对明显的 Mermaid 流程图兼容识别，
-  // 这样旧文档无需逐个修改围栏语言；其他 markup 代码仍按普通代码显示。
-  return language === 'markup' && /^\s*(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b/i.test(source);
-}
 
 class MermaidCodeBlockView {
   constructor(node) {
@@ -104,7 +96,7 @@ class MermaidCodeBlockView {
     this.preview.replaceChildren();
     this.preview.dataset.mermaidRendering = 'true';
     try {
-      configureMermaid();
+      window.configureMermaid(mermaid, currentTheme);
       const { svg, bindFunctions } = await mermaid.render(`mermaid-wysiwyg-${++mermaidDiagramId}`, source);
       if (token !== this.renderToken || !this.preview.isConnected) return;
       this.preview.innerHTML = svg;
@@ -161,33 +153,6 @@ function mermaidCodeSyntaxHighlight(context) {
   };
 }
 
-const mermaidHTMLRenderer = {
-  codeBlock(node, context) {
-    if (!isMermaidCodeBlock(node)) return context.origin();
-    context.skipChildren();
-    return [
-      {
-        type: 'openTag',
-        tagName: 'div',
-        classNames: ['mermaid-diagram'],
-        attributes: { contenteditable: 'false' },
-        outerNewLine: true
-      },
-      { type: 'text', content: node.literal || '' },
-      { type: 'closeTag', tagName: 'div', outerNewLine: true }
-    ];
-  }
-};
-
-function configureMermaid() {
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    suppressErrorRendering: true,
-    theme: currentTheme === 'dark' ? 'dark' : 'default'
-  });
-}
-
 async function renderMermaidDiagrams() {
   if (mermaidRenderRunning) {
     mermaidRenderRequested = true;
@@ -200,28 +165,9 @@ async function renderMermaidDiagrams() {
   if (!diagrams.length) return;
 
   mermaidRenderRunning = true;
-  configureMermaid();
   for (const diagram of diagrams) {
     if (!diagram.isConnected || diagram.dataset.mermaidRendering === 'true') continue;
-    const source = diagram.textContent || '';
-    diagram.dataset.mermaidRendering = 'true';
-    try {
-      const id = `mermaid-diagram-${++mermaidDiagramId}`;
-      const { svg, bindFunctions } = await mermaid.render(id, source);
-      if (!diagram.isConnected) continue;
-      diagram.innerHTML = svg;
-      diagram.dataset.mermaidRendered = 'true';
-      diagram.removeAttribute('data-mermaid-rendering');
-      diagram.removeAttribute('data-mermaid-error');
-      if (bindFunctions) bindFunctions(diagram);
-    } catch (error) {
-      if (!diagram.isConnected) continue;
-      diagram.textContent = source;
-      diagram.dataset.mermaidRendered = 'true';
-      diagram.dataset.mermaidError = 'true';
-      diagram.removeAttribute('data-mermaid-rendering');
-      console.warn('Mermaid 图表渲染失败:', error);
-    }
+    await window.renderMermaidInto(diagram, mermaid, `mermaid-diagram-${++mermaidDiagramId}`, currentTheme);
   }
   mermaidRenderRunning = false;
 
@@ -253,19 +199,35 @@ window.api.onSystemOpenDocument((filePath) => {
 // ============ 主题 ============
 function applyTheme(theme, fromSystem = false) {
   if (fromSystem && !followsSystemTheme) return;
+  const themeChanged = theme !== currentTheme;
   currentTheme = theme;
   document.body.classList.toggle('theme-dark', theme === 'dark');
   document.body.classList.toggle('theme-light', theme === 'light');
   themeIconEl.textContent = theme === 'dark' ? '☀️' : '🌙';
   themeIconEl.parentElement.title =
     `切换主题 (当前: ${theme === 'dark' ? '暗色' : '亮色'}${fromSystem ? '，跟随系统' : ''})`;
-  // Toast UI 主题：重建编辑器（官方推荐方式）
-  rebuildEditor();
+  // Toast UI 主题：重建编辑器（官方推荐方式）。主题值未变化时跳过，
+  // 避免系统主题通知触发不必要的重建（闪屏 + 丢失选区）。
+  if (themeChanged || !editor) rebuildEditor();
 }
 
 function toggleTheme() {
   followsSystemTheme = false;
-  applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+  const next = currentTheme === 'dark' ? 'light' : 'dark';
+  window.api.setPreference({ theme: next });
+  applyTheme(next);
+}
+
+async function followSystemTheme() {
+  followsSystemTheme = true;
+  try {
+    const sys = await window.api.getSystemTheme();
+    window.api.setPreference({ theme: 'system' });
+    applyTheme(sys, true);
+    setStatus(sys === 'dark' ? '已切换为跟随系统（当前暗色）' : '已切换为跟随系统（当前亮色）');
+  } catch (_) {
+    toast('无法读取系统主题');
+  }
 }
 
 function updateEditMode(mode) {
@@ -298,7 +260,7 @@ function createEditor(initialValue) {
     theme: currentTheme,
     initialValue: initialValue,
     plugins: [mermaidCodeSyntaxHighlight],  // Mermaid NodeView + 其他代码块 Prism 高亮
-    customHTMLRenderer: mermaidHTMLRenderer,
+    customHTMLRenderer: window.createMermaidHtmlRenderer(),
     toolbarItems: [
       ['heading', 'bold', 'italic', 'strike'],
       ['hr', 'quote'],
@@ -320,9 +282,11 @@ function createEditor(initialValue) {
         setDirty(md !== lastSavedContent);
         if (!findPanelEl.hidden) updateFindCount();
         scheduleMermaidRender();
+        scheduleOutlineRefresh();
       },
       changeMode: (mode) => {
         updateEditMode(mode);
+        updateCaretStatus();
         scheduleMermaidRender();
         // Toast UI 在 changeMode 通知后仍会完成一次 code-block NodeView 更新。
         setTimeout(scheduleMermaidRender, 80);
@@ -330,25 +294,43 @@ function createEditor(initialValue) {
     }
   });
   instance.on('afterPreviewRender', scheduleMermaidRender);
+  // 光标事件统一走 instance.on：构造函数 events 选项不转发 focus/blur/caretChange。
+  instance.on('caretChange', updateCaretStatus);
+  instance.on('focus', updateCaretStatus);
+  instance.on('blur', () => updateCursorPos(null));
   scheduleMermaidRender();
   return instance;
+}
+
+// 兜底：源码模式的 ProseMirror 不总触发 Toast UI blur 事件，
+// 任何焦点离开编辑区的时机都重新校验一次光标显示。
+function watchEditorFocusLoss() {
+  document.addEventListener('focusout', () => {
+    setTimeout(updateCaretStatus, 0);
+  });
 }
 
 // 重建编辑器（用于切换主题）
 function rebuildEditor() {
   if (!editor) return;
   const md = editor.getMarkdown();
-  const scrollContainer = document.querySelector('.toastui-editor-ww-container, .toastui-editor-md-preview');
-  const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+  const scroll = captureEditorScroll();
   const wasDirty = isDirty;
+  let selection = null;
+  try {
+    selection = editor.getSelection();
+  } catch (_) { /* 选区不可读时跳过恢复 */ }
   editor.destroy();
   editor = createEditor(md);
   window.editor = editor;
   setDirty(wasDirty);
-  requestAnimationFrame(() => {
-    const nextScrollContainer = document.querySelector('.toastui-editor-ww-container, .toastui-editor-md-preview');
-    if (nextScrollContainer) nextScrollContainer.scrollTop = scrollTop;
-  });
+  if (selection) {
+    try {
+      // getSelection/setSelection 在同一模式下格式一致（源码 [行,列]，所见即所得偏移量）。
+      editor.setSelection(selection[0], selection[1]);
+    } catch (_) { /* 位置失效则放弃恢复 */ }
+  }
+  restoreEditorScroll(scroll);
 }
 
 // ============ 状态更新 ============
@@ -507,6 +489,142 @@ async function openDocumentFromSidebar(filePath) {
   }
 }
 
+// ============ 大纲面板 ============
+let outlineEntries = [];
+let outlineRefreshTimer = null;
+
+function setSidebarTab(tab) {
+  const isOutline = tab === 'outline';
+  tabFilesEl.classList.toggle('active', !isOutline);
+  tabOutlineEl.classList.toggle('active', isOutline);
+  tabFilesEl.setAttribute('aria-selected', String(!isOutline));
+  tabOutlineEl.setAttribute('aria-selected', String(isOutline));
+  fileTreeEl.hidden = isOutline;
+  outlinePanelEl.hidden = !isOutline;
+  if (isOutline) rebuildOutline();
+}
+
+function scheduleOutlineRefresh() {
+  if (outlinePanelEl.hidden) return;
+  if (outlineRefreshTimer) clearTimeout(outlineRefreshTimer);
+  outlineRefreshTimer = setTimeout(() => {
+    outlineRefreshTimer = null;
+    rebuildOutline();
+  }, 300);
+}
+
+function rebuildOutline() {
+  if (!editor) return;
+  const listScrollTop = outlineListEl.scrollTop;
+  outlineEntries = extractOutline(editor.getMarkdown());
+  outlineListEl.replaceChildren();
+  if (!outlineEntries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'sidebar-empty';
+    empty.textContent = '当前文档没有标题。';
+    outlineListEl.appendChild(empty);
+    return;
+  }
+  outlineEntries.forEach((entry, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'outline-item';
+    button.style.paddingLeft = `${8 + (entry.level - 1) * 12}px`;
+    button.title = entry.text;
+    button.dataset.index = String(index);
+    const label = document.createElement('span');
+    label.className = 'outline-text';
+    label.textContent = entry.text;
+    const level = document.createElement('span');
+    level.className = 'outline-level';
+    level.textContent = `H${entry.level}`;
+    button.append(label, level);
+    button.addEventListener('click', () => jumpToHeading(index));
+    outlineListEl.appendChild(button);
+  });
+  outlineListEl.scrollTop = listScrollTop;
+  updateOutlineActive();
+}
+
+function jumpToHeading(index) {
+  const entry = outlineEntries[index];
+  if (!entry) return;
+  if (currentEditMode === 'markdown') {
+    // 源码模式 setSelection 使用 1-based [行, 列]，自带滚动定位。
+    editor.setSelection([entry.line, 1], [entry.line, 1]);
+  } else {
+    const pos = wwHeadingPosition(index);
+    if (pos === null) {
+      toast('该标题无法在当前视图定位，请切换到源码模式');
+      return;
+    }
+    editor.setSelection(pos, pos);
+  }
+  editor.focus();
+}
+
+// 所见即所得模式的 heading 节点按文档序与 markdown 标题一一对应。
+function wwHeadingPositions() {
+  const positions = [];
+  try {
+    const view = editor.getCurrentModeEditor().view;
+    view.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'heading') positions.push({ pos: pos + 1, text: node.textContent });
+      return true;
+    });
+  } catch (_) { /* 视图不可用 */ }
+  return positions;
+}
+
+function wwHeadingPosition(index) {
+  const entry = outlineEntries[index];
+  if (!entry) return null;
+  const headings = wwHeadingPositions();
+  if (headings.length === outlineEntries.length) {
+    return headings[index] ? headings[index].pos : null;
+  }
+  const byText = headings.find((heading) => heading.text === entry.text);
+  return byText ? byText.pos : null;
+}
+
+// 光标移动时高亮当前所属章节标题。
+function updateOutlineActive() {
+  if (outlinePanelEl.hidden || !outlineEntries.length) return;
+  let activeIndex = -1;
+  try {
+    if (currentEditMode === 'markdown') {
+      const line = editor.getSelection()[0][0];
+      for (let index = 0; index < outlineEntries.length; index += 1) {
+        if (outlineEntries[index].line <= line) activeIndex = index;
+        else break;
+      }
+    } else {
+      const view = editor.getCurrentModeEditor().view;
+      const offset = Math.max(0, Math.min(editor.getSelection()[0], view.state.doc.content.size));
+      const childIndex = view.state.doc.resolve(offset).index(0);
+      let headingCount = 0;
+      view.state.doc.forEach((node, _offset, index) => {
+        if (index <= childIndex && node.type.name === 'heading') headingCount += 1;
+      });
+      activeIndex = headingCount - 1;
+    }
+  } catch (_) {
+    return;
+  }
+  outlineListEl.querySelectorAll('.outline-item.active').forEach((el) => el.classList.remove('active'));
+  if (activeIndex >= 0 && activeIndex < outlineEntries.length) {
+    const item = outlineListEl.querySelector(`.outline-item[data-index="${activeIndex}"]`);
+    if (item) {
+      item.classList.add('active');
+      const itemRect = item.getBoundingClientRect();
+      const listRect = outlineListEl.getBoundingClientRect();
+      if (itemRect.top < listRect.top || itemRect.bottom > listRect.bottom) {
+        item.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }
+}
+
 function setStatus(text) {
   statusInfoEl.textContent = text;
 }
@@ -525,43 +643,39 @@ function updateCursorPos(pos) {
 
 function updateZoomLevel(level) {
   if (!zoomLevelEl) return;
-  zoomLevelEl.textContent = `${Math.round((1 + level * 0.1) * 100)}%`;
+  // Electron 缩放因子 = 1.2^zoomLevel（zoomLevel 为对数刻度）。
+  const factor = Math.round(Math.pow(1.2, Number(level) || 0) * 100);
+  zoomLevelEl.textContent = `${factor}%`;
 }
 
-// 通过 ProseMirror view 追踪光标位置（编辑器聚焦时）
-function setupCursorTracker() {
-  if (!editor) return;
-  const el = document.getElementById('editor');
-  if (!el) return;
-  let rafId = 0;
-  const tick = () => {
-    rafId = requestAnimationFrame(() => {
-      // 获取 ProseMirror view（从 editor 实例上）
-      const pmView = editor._view || editor.view || editor.getMarkdown;
-      // 尝试通过 DOM 获取光标位置
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0);
-        const mdContent = editor.getMarkdown();
-        const { line, col } = getLineColFromOffset(mdContent, range.startOffset);
-        updateCursorPos({ line, col });
-      }
-      tick();
-    });
-  };
-  tick();
-  // 清理：离开页面时停止
-  window.addEventListener('beforeunload', () => cancelAnimationFrame(rafId));
-}
-
-function getLineColFromOffset(text, offset) {
-  if (!text || offset < 0) return { line: 1, col: 1 };
-  let line = 1, col = 1;
-  for (let i = 0; i < offset && i < text.length; i++) {
-    if (text[i] === '\n') { line++; col = 1; }
-    else { col++; }
+// 通过 Toast UI caretChange 事件追踪光标位置（编辑器聚焦时才显示）。
+function getCaretPosition() {
+  try {
+    const selection = editor.getSelection();
+    if (currentEditMode === 'markdown') {
+      // 源码模式：getSelection 返回 1-based [行, 列] 位置对。
+      const start = selection[0];
+      if (!Array.isArray(start)) return null;
+      return { line: start[0], col: start[1] };
+    }
+    // 所见即所得模式：getSelection 返回文档偏移量，用 ProseMirror 状态
+    // 换算为“块序号 + 块内列号”，与用户感知的行/列一致。
+    const view = editor.getCurrentModeEditor().view;
+    const offset = Math.max(0, Math.min(selection[0], view.state.doc.content.size));
+    const $from = view.state.doc.resolve(offset);
+    return { line: $from.index(0) + 1, col: $from.parentOffset + 1 };
+  } catch (_) {
+    return null;
   }
-  return { line, col };
+}
+
+function updateCaretStatus() {
+  let focused = false;
+  try {
+    focused = editor.getCurrentModeEditor().view.hasFocus();
+  } catch (_) { /* 编辑器尚未就绪 */ }
+  updateCursorPos(focused ? getCaretPosition() : null);
+  updateOutlineActive();
 }
 
 let toastTimer = null;
@@ -605,6 +719,7 @@ async function newDocument() {
   updateWordCount('');
   setStatus('已新建空白文档');
   toast('已新建文档');
+  window.api.stopWatchingDocument();
   editor.focus();
   return true;
 }
@@ -702,6 +817,37 @@ async function handleImageInsert(blob, callback) {
   }
 }
 
+// ============ 打印与导出 ============
+async function printDocument() {
+  try {
+    setStatus('正在准备打印…');
+    const result = await window.api.printDocument(editor.getMarkdown());
+    if (result && result.error) { toast('打印失败: ' + result.error); return; }
+    if (result && result.canceled) { setStatus('已取消打印'); return; }
+    setStatus('已发送到打印机');
+  } catch (error) {
+    toast('打印失败: ' + error.message);
+  }
+}
+
+async function exportDocument(format) {
+  try {
+    const extension = format === 'pdf' ? 'pdf' : 'html';
+    let suggestedPath = null;
+    if (currentFilePath) {
+      suggestedPath = currentFilePath.replace(/\.(md|markdown|mdown|txt)$/i, `.${extension}`);
+    }
+    setStatus(`正在导出 ${extension.toUpperCase()}…`);
+    const result = await window.api.exportDocument(format, editor.getMarkdown(), suggestedPath);
+    if (result && result.canceled) { setStatus('已取消导出'); return; }
+    if (result && result.error) { toast('导出失败: ' + result.error); return; }
+    toast('已导出 ' + baseName(result.filePath));
+    setStatus('已导出: ' + result.filePath);
+  } catch (error) {
+    toast('导出失败: ' + error.message);
+  }
+}
+
 // ============ 查找与替换 ============
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -713,22 +859,101 @@ function getFindExpression() {
   return new RegExp(escapeRegExp(query), caseSensitiveEl.checked ? 'g' : 'gi');
 }
 
-function getFindMatches(content = editor.getMarkdown()) {
+function getMarkdownMatches() {
   const expression = getFindExpression();
   if (!expression) return [];
+  const content = editor.getMarkdown();
   return Array.from(content.matchAll(expression), (match) => ({
     index: match.index,
     length: match[0].length
   }));
 }
 
+function textIndexToLineCol(text, index) {
+  let line = 1;
+  let lineStart = 0;
+  for (let i = 0; i < index && i < text.length; i += 1) {
+    if (text[i] === '\n') {
+      line += 1;
+      lineStart = i + 1;
+    }
+  }
+  return { line, col: index - lineStart + 1 };
+}
+
+// 当前模式“可见文本”及其匹配：
+// - 源码模式：文本即 Markdown 源，匹配位置可直接用于 setSelection。
+// - 所见即所得模式：遍历 ProseMirror 文档构建 文本↔位置 映射，块边界插 \n
+//   防止跨块误匹配。查找/计数/高亮始终基于用户看得见的文本，与 Markdown
+//   源中的替换通过序号一一对应。
+function getVisibleMatches() {
+  const expression = getFindExpression();
+  if (!expression) return { text: '', map: [], matches: [] };
+  if (currentEditMode === 'markdown') {
+    const text = editor.getMarkdown();
+    return { text, map: null, matches: Array.from(text.matchAll(expression), (m) => ({ index: m.index, length: m[0].length })) };
+  }
+  let text = '';
+  const map = [];
+  let view = null;
+  try {
+    view = editor.getCurrentModeEditor().view;
+  } catch (_) {
+    return { text: '', map: [], matches: [] };
+  }
+  view.state.doc.descendants((node, pos) => {
+    if (node.isText && node.text) {
+      map.push({ start: text.length, end: text.length + node.text.length, pos });
+      text += node.text;
+      return true;
+    }
+    if (node.isLeaf) {
+      const size = Math.max(node.nodeSize, 1);
+      map.push({ start: text.length, end: text.length + size, pos, leaf: true });
+      text += '\ufffc';
+      return false;
+    }
+    if (node.isBlock && text.length > 0 && !text.endsWith('\n')) {
+      text += '\n';
+    }
+    return true;
+  });
+  const matches = Array.from(text.matchAll(expression), (m) => ({ index: m.index, length: m[0].length }));
+  return { text, map, matches };
+}
+
+function modePositionForIndex(visible, index) {
+  if (!visible.map) return index;
+  for (const entry of visible.map) {
+    if (index >= entry.start && index <= entry.end) {
+      return entry.pos + (index - entry.start);
+    }
+  }
+  const last = visible.map[visible.map.length - 1];
+  return last ? last.pos + (last.end - last.start) : 0;
+}
+
+// 高亮第 n 个匹配：源码模式用 [行, 列]，所见即所得模式用文档偏移量；
+// Toast UI 的 setSelection 两种模式都会自动把选区滚动到可视区。
+function highlightMatch(visible, match) {
+  const startIndex = match.index;
+  const endIndex = match.index + Math.max(match.length, 1);
+  if (currentEditMode === 'markdown') {
+    const from = textIndexToLineCol(visible.text, startIndex);
+    const to = textIndexToLineCol(visible.text, endIndex);
+    editor.setSelection([from.line, from.col], [to.line, to.col]);
+  } else {
+    editor.setSelection(modePositionForIndex(visible, startIndex), modePositionForIndex(visible, endIndex));
+  }
+}
+
 function updateFindCount() {
-  const signature = `${caseSensitiveEl.checked ? '1' : '0'}:${findInputEl.value}`;
+  const signature = `${currentEditMode}:${caseSensitiveEl.checked ? '1' : '0'}:${findInputEl.value}`;
   if (signature !== lastFindSignature) {
     lastFindSignature = signature;
     currentFindMatch = -1;
   }
-  const count = getFindMatches().length;
+  const count = getVisibleMatches().matches.length;
   if (currentFindMatch >= count) currentFindMatch = count - 1;
   findCountEl.textContent = currentFindMatch >= 0 ? `${currentFindMatch + 1}/${count}` : `${count} 处`;
   findCountEl.classList.toggle('no-result', Boolean(findInputEl.value) && count === 0);
@@ -739,6 +964,8 @@ function showFindPanel(replaceMode = false) {
   findPanelEl.hidden = false;
   if (replaceMode) findPanelEl.classList.add('replace-mode');
   updateFindCount();
+  // 焦点即将移到查找输入框，光标位置显示随之清空（不依赖编辑器 blur 事件）。
+  updateCursorPos(null);
   requestAnimationFrame(() => {
     findInputEl.focus();
     findInputEl.select();
@@ -756,8 +983,11 @@ function findInEditor(backwards = false) {
     showFindPanel();
     return false;
   }
-  const count = updateFindCount();
+  const visible = getVisibleMatches();
+  const count = visible.matches.length;
   if (count === 0) {
+    findCountEl.textContent = '0 处';
+    findCountEl.classList.add('no-result');
     toast('未找到匹配内容');
     return false;
   }
@@ -765,30 +995,62 @@ function findInEditor(backwards = false) {
     ? (currentFindMatch <= 0 ? count - 1 : currentFindMatch - 1)
     : (currentFindMatch + 1) % count;
   findCountEl.textContent = `${currentFindMatch + 1}/${count}`;
-  const found = window.find(
-    query,
-    caseSensitiveEl.checked,
-    backwards,
-    true,
-    false,
-    false,
-    false
-  );
-  if (!found) toast('未找到匹配内容');
-  return found;
+  findCountEl.classList.remove('no-result');
+  highlightMatch(visible, visible.matches[currentFindMatch]);
+  return true;
+}
+
+// 编辑器滚动容器：所见即所得为可见的 ProseMirror 内容区，源码模式还有预览列。
+function getVisibleScrollContainers() {
+  return Array.from(document.querySelectorAll(
+    '.toastui-editor .ProseMirror, .toastui-editor-md-preview'
+  )).filter((el) => el.offsetParent !== null);
+}
+
+function captureEditorScroll() {
+  return getVisibleScrollContainers().map((el) => ({
+    preview: el.classList.contains('toastui-editor-md-preview'),
+    top: el.scrollTop
+  }));
+}
+
+function restoreEditorScroll(captured) {
+  if (!captured || !captured.length) return;
+  requestAnimationFrame(() => {
+    for (const snapshot of captured) {
+      const el = getVisibleScrollContainers()
+        .find((candidate) => candidate.classList.contains('toastui-editor-md-preview') === snapshot.preview);
+      if (el) el.scrollTop = snapshot.top;
+    }
+  });
 }
 
 function replaceCurrentMatch() {
   if (!findInputEl.value) return;
-  let matches = getFindMatches();
-  if (matches.length === 0) { toast('未找到匹配内容'); return; }
-  if (currentFindMatch < 0 || currentFindMatch >= matches.length) currentFindMatch = 0;
-  const match = matches[currentFindMatch];
+  const visible = getVisibleMatches();
+  if (visible.matches.length === 0) { toast('未找到匹配内容'); return; }
+  if (currentFindMatch < 0 || currentFindMatch >= visible.matches.length) currentFindMatch = 0;
+
+  // 替换操作针对 Markdown 源文件内容；通过“第 n 个匹配”的序号对齐当前高亮项。
+  const markdownMatches = getMarkdownMatches();
+  let mdMatch = null;
+  if (currentEditMode === 'markdown') {
+    mdMatch = visible.matches[currentFindMatch];
+  } else if (markdownMatches.length === visible.matches.length) {
+    mdMatch = markdownMatches[currentFindMatch];
+  }
+  if (!mdMatch) {
+    toast('当前视图下无法对齐替换位置，请切换到源码模式');
+    return;
+  }
+
   const content = editor.getMarkdown();
-  const nextContent = content.slice(0, match.index) +
+  const nextContent = content.slice(0, mdMatch.index) +
     replaceInputEl.value +
-    content.slice(match.index + match.length);
+    content.slice(mdMatch.index + mdMatch.length);
+  const scroll = captureEditorScroll();
   editor.setMarkdown(nextContent, false);
+  restoreEditorScroll(scroll);
   currentFindMatch -= 1;
   updateFindCount();
   findInEditor(false);
@@ -803,8 +1065,10 @@ function replaceAllMatches() {
     toast('未找到匹配内容');
     return;
   }
+  const scroll = captureEditorScroll();
   const nextContent = content.replace(expression, () => replaceInputEl.value);
   editor.setMarkdown(nextContent, false);
+  restoreEditorScroll(scroll);
   currentFindMatch = -1;
   updateFindCount();
   toast(`已替换 ${matches.length} 处`);
@@ -829,7 +1093,7 @@ window.addEventListener('drop', async (e) => {
   const filePath = window.api.getPathForFile(file);
   if (!filePath) return;
   if (!/\.(md|markdown|mdown|txt)$/i.test(filePath)) {
-    toast('仅支持 Markdown 文件 (.md/.markdown/.txt)');
+    toast('仅支持 Markdown 文件 (.md/.markdown/.mdown/.txt)');
     return;
   }
   try {
@@ -852,13 +1116,18 @@ document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
 sidebarButtonEl.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
 sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree());
+tabFilesEl.addEventListener('click', () => setSidebarTab('files'));
+tabOutlineEl.addEventListener('click', () => setSidebarTab('outline'));
 document.getElementById('btn-find').addEventListener('click', () => showFindPanel(false));
 modeButtonEl.addEventListener('click', toggleEditMode);
 document.getElementById('btn-theme').addEventListener('click', toggleTheme);
 
 document.getElementById('btn-find-expand').addEventListener('click', () => {
   findPanelEl.classList.toggle('replace-mode');
-  if (findPanelEl.classList.contains('replace-mode')) replaceInputEl.focus();
+  if (findPanelEl.classList.contains('replace-mode')) {
+    replaceInputEl.focus();
+    updateCursorPos(null);
+  }
 });
 document.getElementById('btn-find-prev').addEventListener('click', () => findInEditor(true));
 document.getElementById('btn-find-next').addEventListener('click', () => findInEditor(false));
@@ -900,6 +1169,10 @@ function handleEditorCommand(name, payload = {}) {
         break;
       case 'toggleMode': toggleEditMode(); break;
       case 'toggleSidebar': setSidebarCollapsed(!sidebarCollapsed); break;
+      case 'showOutline': setSidebarTab('outline'); break;
+      case 'followSystemTheme': void followSystemTheme(); break;
+      case 'print': void printDocument(); break;
+      case 'export': void exportDocument(payload.format === 'html' ? 'html' : 'pdf'); break;
       case 'popup': openToolbarPopup(payload.name); break;
       case 'dateTime': editor.insertText('\n' + nowString() + '\n'); break;
       default: editor.exec(name, payload); break;
@@ -921,6 +1194,10 @@ window.api.onSaveBeforeClose(async () => {
   if (await saveFile(false)) window.api.closeAfterSave();
 });
 window.api.onZoomLevelChanged((level) => updateZoomLevel(level));
+window.api.onFileExternalChanged(() => {
+  toast('文件已在磁盘上被外部修改');
+  setStatus('文件已被外部程序修改；如需最新内容请从侧边栏重新打开');
+});
 
 // ============ 右键上下文菜单（类 Typora）============
 const MENU_ITEMS = [
@@ -1096,7 +1373,11 @@ function setupContextMenu() {
     hideContextMenu();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hideContextMenu();
+    if (e.key === 'Escape') {
+      hideContextMenu();
+      // Escape 任何位置都能关闭查找面板（不只是面板内的输入框）。
+      if (!findPanelEl.hidden) closeFindPanel();
+    }
   });
   window.addEventListener('scroll', hideContextMenu, true);
   window.addEventListener('resize', hideContextMenu);
@@ -1104,9 +1385,16 @@ function setupContextMenu() {
 
 // ============ 启动 ============
 async function init() {
+  // 偏好：持久化主题优先；'system' 跟随系统。
   try {
-    const sys = await window.api.getSystemTheme();
-    currentTheme = sys;
+    const prefs = await window.api.getPreferences();
+    if (prefs && (prefs.theme === 'light' || prefs.theme === 'dark')) {
+      currentTheme = prefs.theme;
+      followsSystemTheme = false;
+    } else {
+      currentTheme = await window.api.getSystemTheme();
+      followsSystemTheme = true;
+    }
   } catch (e) { /* 默认 light */ }
   document.body.classList.toggle('theme-dark', currentTheme === 'dark');
   document.body.classList.toggle('theme-light', currentTheme === 'light');
@@ -1129,7 +1417,7 @@ async function init() {
   updateTitle();
   setStatus('已新建空白文档');
   setupContextMenu();
-  setupCursorTracker();
+  watchEditorFocusLoss();
 
   try {
     const startupDocument = await window.api.takeStartupDocument();

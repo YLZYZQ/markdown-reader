@@ -1,0 +1,83 @@
+/* 打印/导出渲染态：白底、只保留预览列、分页友好。 */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+  color: #1f2328;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+}
+#print-editor {
+  height: auto;
+  overflow: visible;
+}
+/* 隐藏工具栏、模式页签、右键菜单与源码编辑列，只保留渲染后的预览 */
+.toastui-editor-defaultUI { border: none !important; }
+.toastui-editor-toolbar,
+.toastui-editor-defaultUI-toolbar,
+.toastui-editor-md-tab-container,
+.toastui-editor-context-menu,
+.toastui-editor-mode-switch { display: none !important; }
+.toastui-editor-main { height: auto !important; }
+.toastui-editor-md-container {
+  display: block !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+.toastui-editor-md-container .toastui-editor.md-mode,
+.toastui-editor-md-splitter { display: none !important; }
+.toastui-editor-md-container .toastui-editor-md-preview,
+.toastui-editor-md-preview {
+  width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  background: #ffffff !important;
+  color: #1f2328;
+}
+.toastui-editor-md-preview h1 { font-size: 1.9em; }
+.toastui-editor-md-preview h2 { font-size: 1.5em; }
+.toastui-editor-md-preview h3 { font-size: 1.25em; }
+.toastui-editor-md-preview h4,
+.toastui-editor-md-preview h5,
+.toastui-editor-md-preview h6 { font-size: 1.1em; }
+.toastui-editor-md-preview h1,
+.toastui-editor-md-preview h2,
+.toastui-editor-md-preview h3,
+.toastui-editor-md-preview h4,
+.toastui-editor-md-preview h5,
+.toastui-editor-md-preview h6 { break-after: avoid; page-break-after: avoid; }
+.toastui-editor-md-preview pre,
+.toastui-editor-md-preview blockquote,
+.toastui-editor-md-preview table,
+.toastui-editor-md-preview .mermaid-diagram {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.toastui-editor-md-preview code,
+.toastui-editor-md-preview pre { white-space: pre-wrap; overflow-wrap: break-word; }
+.toastui-editor-md-preview table { width: 100%; border-collapse: collapse; }
+.toastui-editor-md-preview table th,
+.toastui-editor-md-preview table td { border: 1px solid #d0d7de; padding: 5px 10px; }
+.toastui-editor-md-preview a { color: #0969da; text-decoration: none; }
+/* Mermaid 图表 */
+.toastui-editor-md-preview .mermaid-diagram {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 16px 0;
+  padding: 12px;
+  overflow: visible;
+  text-align: center;
+  background: #ffffff;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 6px;
+}
+.toastui-editor-md-preview .mermaid-diagram svg { display: inline-block; max-width: 100%; height: auto; }
+.toastui-editor-md-preview .mermaid-diagram[data-mermaid-error="true"] {
+  color: #c0392b;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+}

@@ -20,7 +20,15 @@ contextBridge.exposeInMainWorld('api', {
   confirmReplace: () => ipcRenderer.invoke('document:confirmReplace'),
   setDocumentDirty: (dirty) => ipcRenderer.send('document:setDirty', Boolean(dirty)),
   closeAfterSave: () => ipcRenderer.send('window:closeAfterSave'),
+  stopWatchingDocument: () => ipcRenderer.send('document:stopWatching'),
   getSystemTheme: () => ipcRenderer.invoke('theme:getSystem'),
+  getPreferences: () => ipcRenderer.invoke('prefs:getAll'),
+  setPreference: (patch) => ipcRenderer.send('prefs:set', patch),
+
+  // 打印与导出（渲染进程传当前 markdown 快照与建议保存路径）
+  printDocument: (markdown) => ipcRenderer.invoke('print:document', markdown),
+  exportDocument: (format, markdown, suggestedPath) =>
+    ipcRenderer.invoke('export:document', format, markdown, suggestedPath),
 
   // Toast UI addImageBlobHook 用：传 ArrayBuffer 给主进程存盘
   saveImageBlob: (mdFilePath, fileName, arrayBuffer) =>
@@ -37,5 +45,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // 系统主题变化
   onSystemThemeChanged: (cb) => on('theme:systemChanged', cb),
-  onZoomLevelChanged: (cb) => on('zoom:levelChanged', cb)
+  onZoomLevelChanged: (cb) => on('zoom:levelChanged', cb),
+
+  // 文件被外部程序修改
+  onFileExternalChanged: (cb) => on('file:externalChanged', cb)
 });

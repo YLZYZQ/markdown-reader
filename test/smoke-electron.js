@@ -5,6 +5,15 @@ const path = require('path');
 
 app.commandLine.appendSwitch('disable-gpu');
 ipcMain.handle('theme:getSystem', () => 'light');
+ipcMain.handle('prefs:getAll', () => ({ theme: 'system', windowBounds: null, zoomLevel: 0 }));
+const prefPatches = [];
+ipcMain.on('prefs:set', (_event, patch) => prefPatches.push(patch));
+const exportCalls = [];
+ipcMain.handle('export:document', (_event, format, markdown) => {
+  exportCalls.push({ format, markdownIsString: typeof markdown === 'string' });
+  return { canceled: false, filePath: 'C:\\tmp\\out.' + format };
+});
+ipcMain.handle('print:document', () => ({ canceled: false }));
 ipcMain.handle('startup:takeDocument', () => ({ canceled: true }));
 ipcMain.handle('file:openPath', (_event, filePath) => ({
   filePath,
@@ -41,9 +50,12 @@ app.whenReady().then(async () => {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      backgroundThrottling: false
     }
   });
+  // 隐藏窗口默认节流 setTimeout/rAF，会让时序敏感的断言失真。
+  window.webContents.setBackgroundThrottling(false);
 
   const pageErrors = [];
   window.webContents.on('console-message', (_event, level, message) => {
@@ -202,6 +214,122 @@ app.whenReady().then(async () => {
     document.getElementById('btn-replace-all').click();
     rootResults.replaced = window.editor.getMarkdown();
     document.getElementById('btn-find-close').click();
+
+    // —— 回归：全部替换后保持滚动位置 ——
+    // 隐藏窗口不产帧（rAF 回调不执行、滚动偏移冻结），因此用属性拦截 +
+    // 手动清空 rAF 队列的方式验证"捕获→替换→写回"恢复管线。
+    const longParas = Array.from({ length: 120 }, (_, i) => '段落' + i + ' 目标词').join('\\n\\n');
+    window.editor.setMarkdown(longParas, false);
+    await wait(200);
+    const scroller = Array.from(document.querySelectorAll('.toastui-editor .ProseMirror'))
+      .find((el) => el.offsetParent !== null);
+    const scrollWrites = [];
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => 1500,
+      set: (value) => scrollWrites.push(value)
+    });
+    const queuedRafs = [];
+    const originalRaf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => { queuedRafs.push(callback); return queuedRafs.length; };
+    document.getElementById('btn-find').click();
+    findInput.value = '目标词';
+    findInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('btn-find-expand').click();
+    replaceInput.value = '已替换';
+    document.getElementById('btn-replace-all').click();
+    // 手动执行排队的 rAF（真实窗口由帧调度执行）
+    while (queuedRafs.length) queuedRafs.shift()(performance.now());
+    window.requestAnimationFrame = originalRaf;
+    rootResults.replaceAllScrollWrites = scrollWrites.join(',');
+    rootResults.replaceAllKeptScroll = scrollWrites.includes(1500);
+    delete scroller.scrollTop; // 移除属性拦截，恢复原型访问器
+    document.getElementById('btn-find-close').click();
+
+    // —— 回归：源码模式查找导航必须落在源码编辑器，而非右侧预览 ——
+    window.editor.changeMode('markdown');
+    await wait(150);
+    window.editor.setMarkdown('alpha 一\\n\\nalpha 二\\n\\n正文', false);
+    document.getElementById('btn-find').click();
+    findInput.value = 'alpha';
+    findInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('btn-find-next').click();
+    await wait(80);
+    const mdSel = window.getSelection();
+    rootResults.mdFindCounter = document.getElementById('find-count').textContent;
+    rootResults.mdFindAnchorInPreview = Boolean(mdSel.anchorNode && mdSel.anchorNode.parentElement &&
+      mdSel.anchorNode.parentElement.closest('.toastui-editor-md-preview'));
+    rootResults.mdFindAnchorInSource = Boolean(mdSel.anchorNode && mdSel.anchorNode.parentElement &&
+      mdSel.anchorNode.parentElement.closest('.ProseMirror'));
+    document.getElementById('btn-find-next').click();
+    await wait(80);
+    rootResults.mdFindCounter2 = document.getElementById('find-count').textContent;
+
+    // —— 回归：编辑器内按 Escape 关闭查找面板 ——
+    document.querySelector('.toastui-editor')
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wait(50);
+    rootResults.escapeClosesFind = document.getElementById('find-panel').hidden;
+
+    // —— 回归：光标位置（源码模式显示 [行,列]） ——
+    window.editor.setMarkdown('L1\\nL2\\nL3\\nL4\\n第五行内容', false);
+    window.editor.setSelection([5, 1], [5, 1]);
+    window.editor.focus();
+    await wait(150);
+    rootResults.cursorMd = document.getElementById('cursor-pos').textContent;
+
+    // —— 回归：查找框聚焦时清空误导性的光标位置 ——
+    document.getElementById('btn-find').click();
+    findInput.focus();
+    await wait(100);
+    rootResults.cursorClearedOnBlur = document.getElementById('cursor-pos').textContent === '';
+
+    // —— 回归：所见即所得模式光标位置（块行号 + 块内列号） ——
+    document.getElementById('btn-find-close').click();
+    window.editor.changeMode('wysiwyg');
+    await wait(150);
+    window.editor.setMarkdown('段落一\\n\\n段落二内容', false);
+    const wwView = window.editor.getCurrentModeEditor().view;
+    let targetPos = 1;
+    wwView.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text && node.text.indexOf('段落二内容') === 0) targetPos = pos + 2;
+      return true;
+    });
+    window.editor.setSelection(targetPos, targetPos);
+    window.editor.focus();
+    await wait(150);
+    // Toast UI 所见即所得模式中 markdown 空行会转换为真实可编辑的空段落，
+    // 因此 '段落一\\n\\n段落二内容' 的第二段位于第 3 行。
+    rootResults.cursorWw = document.getElementById('cursor-pos').textContent;
+
+    // —— 回归 v1.3：大纲面板 ——
+    window.editor.changeMode('markdown');
+    await wait(200);
+    window.editor.setMarkdown('# 一级\\n\\n正文\\n\\n## 二级A\\n\\n\`\`\`\\n# 围栏内不算\\n\`\`\`\\n\\n## 二级B', true);
+    await wait(100);
+    document.getElementById('tab-outline').click();
+    await wait(450); // 300ms 防抖 + 余量
+    rootResults.outlineCount = document.querySelectorAll('.outline-item').length;
+    const outlineItems = document.querySelectorAll('.outline-item');
+    rootResults.outlineFirstText = outlineItems[0]
+      ? outlineItems[0].querySelector('.outline-text').textContent : '';
+    rootResults.outlineFenceExcluded = Array.from(outlineItems).every((item) =>
+      item.textContent.indexOf('围栏内不算') === -1);
+    if (outlineItems[1]) outlineItems[1].click();
+    await wait(120);
+    rootResults.outlineJumpLine = window.editor.getSelection()[0][0]; // '## 二级A' 在第 5 行
+    rootResults.outlineActiveIndex = document.querySelector('.outline-item.active')
+      ? document.querySelector('.outline-item.active').dataset.index : '';
+
+    // —— 回归 v1.3：所见即所得模式大纲跳转 ——
+    window.editor.changeMode('wysiwyg');
+    await wait(250);
+    const wwOutlineItems = document.querySelectorAll('.outline-item');
+    if (wwOutlineItems[1]) wwOutlineItems[1].click();
+    await wait(120);
+    const wwOutlineSelection = window.editor.getSelection()[0];
+    rootResults.outlineWwJump = typeof wwOutlineSelection === 'number' && wwOutlineSelection > 0;
+    document.getElementById('tab-files').click();
 
     rootResults.modeBefore = document.getElementById('btn-mode').textContent;
     await activateContextItem(null, '切换源码模式');
@@ -391,6 +519,44 @@ app.whenReady().then(async () => {
     !/^## 内容/m.test(root.markdownModeHeading)
   ) {
     finish(new Error(`Context menu clipboard regression: ${JSON.stringify(root)}`));
+    return;
+  }
+
+  // —— 回归：本轮 UX/稳定性修复 ——
+  // 缩放百分比：Electron 缩放因子为 1.2^level，level 1 必须显示 120%。
+  window.webContents.send('zoom:levelChanged', 1);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const zoomText = await window.webContents.executeJavaScript(
+    `document.getElementById('zoom-level').textContent`
+  );
+  // v1.3：主题切换应写入偏好补丁；导出命令应携带 markdown 快照到达主进程。
+  root.themePrefPatchReceived = prefPatches.some((patch) => patch && patch.theme === 'dark');
+  window.webContents.send('editor:command', 'export', { format: 'pdf' });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  root.exportWired = exportCalls.length === 1 && exportCalls[0].format === 'pdf' &&
+    exportCalls[0].markdownIsString === true;
+
+  const regressionWork =
+    root.mdFindCounter === '1/2' &&
+    root.mdFindCounter2 === '2/2' &&
+    root.mdFindAnchorInPreview === false &&
+    root.mdFindAnchorInSource === true &&
+    root.escapeClosesFind === true &&
+    root.cursorMd === '第5行 第1列' &&
+    root.cursorClearedOnBlur === true &&
+    root.cursorWw === '第3行 第3列' &&
+    root.replaceAllKeptScroll === true &&
+    root.themePrefPatchReceived === true &&
+    root.exportWired === true &&
+    root.outlineCount === 3 &&
+    root.outlineFirstText === '一级' &&
+    root.outlineFenceExcluded === true &&
+    root.outlineJumpLine === 5 &&
+    root.outlineActiveIndex === '1' &&
+    root.outlineWwJump === true &&
+    zoomText === '120%';
+  if (!regressionWork) {
+    finish(new Error(`UX regression: ${JSON.stringify({ root, zoomText })}`));
     return;
   }
 
