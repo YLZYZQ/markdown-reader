@@ -25,6 +25,15 @@ contextBridge.exposeInMainWorld('api', {
   getPreferences: () => ipcRenderer.invoke('prefs:getAll'),
   setPreference: (patch) => ipcRenderer.send('prefs:set', patch),
 
+  // 崩溃恢复备份
+  writeBackup: (session) => ipcRenderer.send('backup:write', session),
+  clearBackup: () => ipcRenderer.send('backup:clear'),
+  takeBackup: () => ipcRenderer.invoke('backup:take'),
+  confirmBackupRestore: (info) => ipcRenderer.invoke('backup:confirmRestore', info),
+
+  // 最近打开
+  getRecentDocuments: () => ipcRenderer.invoke('recent:get'),
+
   // 打印与导出（渲染进程传当前 markdown 快照与建议保存路径）
   printDocument: (markdown) => ipcRenderer.invoke('print:document', markdown),
   exportDocument: (format, markdown, suggestedPath) =>

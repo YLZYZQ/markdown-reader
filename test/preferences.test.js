@@ -88,3 +88,28 @@ test('boundsIntersectDisplay accepts on-screen and rejects off-screen', () => {
 test('bounds expressed as raw display rects also work', () => {
   assert.equal(boundsIntersectDisplay({ x: 10, y: 10, width: 50, height: 50 }, [{ x: 0, y: 0, width: 100, height: 100 }]), true);
 });
+
+test('v1.4 fields: autoSave, editorFontSize, editorFontFamily', () => {
+  const prefs = sanitizePreferences({ autoSave: true, editorFontSize: 20, editorFontFamily: 'serif' });
+  assert.equal(prefs.autoSave, true);
+  assert.equal(prefs.editorFontSize, 20);
+  assert.equal(prefs.editorFontFamily, 'serif');
+});
+
+test('v1.4 defaults when absent', () => {
+  const prefs = sanitizePreferences({});
+  assert.equal(prefs.autoSave, false);
+  assert.equal(prefs.editorFontSize, 16);
+  assert.equal(prefs.editorFontFamily, '');
+});
+
+test('v1.4 invalid values fall back (font size clamp, family whitelist, autoSave strict)', () => {
+  const prefs = sanitizePreferences({
+    autoSave: 'yes',
+    editorFontSize: 99,
+    editorFontFamily: 'comic-sans',
+  });
+  assert.equal(prefs.autoSave, false);
+  assert.equal(prefs.editorFontSize, 28);
+  assert.equal(prefs.editorFontFamily, '');
+});

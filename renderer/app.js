@@ -33,6 +33,7 @@ document.querySelectorAll('link[href]').forEach((link) => link.setAttribute('hre
 let editor = null;
 window.editor = null;
 let currentFilePath = null;
+let currentBaseUrl = null;
 let isDirty = false;
 let lastSavedContent = '';
 let currentTheme = 'light';
@@ -43,6 +44,11 @@ let lastFindSignature = '';
 let fileTreeRequestId = 0;
 let sidebarCollapsed = false;
 let pendingSystemDocumentPath = null;
+let autoSaveEnabled = false;
+let autoSaveTimer = null;
+let backupTimer = null;
+let saveInFlight = false;
+let editorFontPrefs = { size: 16, family: '' };
 try {
   sidebarCollapsed = localStorage.getItem('md-reader.sidebarCollapsed') === 'true';
 } catch (error) {
@@ -283,6 +289,8 @@ function createEditor(initialValue) {
         if (!findPanelEl.hidden) updateFindCount();
         scheduleMermaidRender();
         scheduleOutlineRefresh();
+        scheduleSessionBackup();
+        scheduleAutoSave();
       },
       changeMode: (mode) => {
         updateEditMode(mode);
@@ -350,6 +358,7 @@ function updateTitle() {
 }
 
 function setDocumentBase(baseUrl) {
+  currentBaseUrl = baseUrl || null;
   documentBaseEl.href = baseUrl || './';
 }
 
@@ -720,6 +729,7 @@ async function newDocument() {
   setStatus('已新建空白文档');
   toast('已新建文档');
   window.api.stopWatchingDocument();
+  discardSessionBackup();
   editor.focus();
   return true;
 }
@@ -752,19 +762,68 @@ async function openSystemDocument(filePath) {
 }
 
 function loadContent(filePath, content, baseUrl) {
-  currentFilePath = filePath;
+  currentFilePath = filePath || null;
   setDocumentBase(baseUrl);
   editor.setMarkdown(content, false);
   // Toast UI 可能规范化末尾换行；以编辑器实际内容作为已保存基线，避免刚打开就误报修改。
   lastSavedContent = editor.getMarkdown();
   findPanelEl.hidden = true;
   setDirty(false);
-  setStatus('已打开: ' + baseName(filePath));
-  toast('已打开 ' + baseName(filePath));
-  void refreshFileTree(filePath);
+  updateTitle();
+  const displayName = filePath ? baseName(filePath) : '未命名.md';
+  setStatus('已打开: ' + displayName);
+  if (filePath) {
+    toast('已打开 ' + displayName);
+    void refreshFileTree(filePath);
+  }
 }
 
-async function saveFile(saveAs = false) {
+// ============ 崩溃恢复备份与自动保存 ============
+// 内容变更 1 秒防抖写入备份（始终开启）；自动保存（可选）2 秒防抖静默保存。
+function scheduleSessionBackup() {
+  if (backupTimer) clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => {
+    backupTimer = null;
+    try {
+      window.api.writeBackup({
+        filePath: currentFilePath,
+        baseUrl: currentBaseUrl,
+        content: editor.getMarkdown(),
+        savedAt: Date.now(),
+      });
+    } catch (_) { /* 备份失败不影响编辑 */ }
+  }, 1000);
+}
+
+function discardSessionBackup() {
+  if (backupTimer) { clearTimeout(backupTimer); backupTimer = null; }
+  try {
+    window.api.clearBackup();
+  } catch (_) { /* 忽略 */ }
+}
+
+function setAutoSaveEnabled(enabled) {
+  autoSaveEnabled = Boolean(enabled);
+  if (!autoSaveEnabled && autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+}
+
+function scheduleAutoSave() {
+  if (!autoSaveEnabled || !currentFilePath || !isDirty) return;
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null;
+    if (autoSaveEnabled && currentFilePath && isDirty && !saveInFlight) {
+      void saveFile(false, { silent: true });
+    }
+  }, 2000);
+}
+
+async function saveFile(saveAs = false, options = {}) {
+  if (saveInFlight) return false;
+  saveInFlight = true;
   try {
     const content = editor.getMarkdown();
     const target = saveAs ? null : currentFilePath;
@@ -776,13 +835,20 @@ async function saveFile(saveAs = false) {
     setDocumentBase(res.baseUrl);
     setDirty(false);
     updateTitle();
-    setStatus('已保存到: ' + baseName(currentFilePath));
-    toast('已保存');
-    void refreshFileTree(currentFilePath);
+    discardSessionBackup();
+    if (options.silent) {
+      setStatus('已自动保存: ' + baseName(currentFilePath));
+    } else {
+      setStatus('已保存到: ' + baseName(currentFilePath));
+      toast('已保存');
+    }
+    if (!options.silent) void refreshFileTree(currentFilePath);
     return true;
   } catch (error) {
     toast('保存失败: ' + error.message);
     return false;
+  } finally {
+    saveInFlight = false;
   }
 }
 
@@ -1173,6 +1239,21 @@ function handleEditorCommand(name, payload = {}) {
       case 'followSystemTheme': void followSystemTheme(); break;
       case 'print': void printDocument(); break;
       case 'export': void exportDocument(payload.format === 'html' ? 'html' : 'pdf'); break;
+      case 'autoSaveChanged': setAutoSaveEnabled(Boolean(payload.enabled)); break;
+      case 'setFontSize':
+        editorFontPrefs.size = Math.min(28, Math.max(12, Number(payload.size) || 16));
+        window.api.setPreference({ editorFontSize: editorFontPrefs.size });
+        applyEditorFontPrefs();
+        setStatus(`正文字号：${editorFontPrefs.size}px`);
+        break;
+      case 'setFontFamily':
+        if (Object.prototype.hasOwnProperty.call(FONT_FAMILY_VALUES, payload.family)) {
+          editorFontPrefs.family = payload.family;
+          window.api.setPreference({ editorFontFamily: editorFontPrefs.family });
+          applyEditorFontPrefs();
+          setStatus('正文字体已更新');
+        }
+        break;
       case 'popup': openToolbarPopup(payload.name); break;
       case 'dateTime': editor.insertText('\n' + nowString() + '\n'); break;
       default: editor.exec(name, payload); break;
@@ -1386,16 +1467,23 @@ function setupContextMenu() {
 // ============ 启动 ============
 async function init() {
   // 偏好：持久化主题优先；'system' 跟随系统。
+  let storedPrefs = null;
   try {
-    const prefs = await window.api.getPreferences();
-    if (prefs && (prefs.theme === 'light' || prefs.theme === 'dark')) {
-      currentTheme = prefs.theme;
+    storedPrefs = await window.api.getPreferences();
+    if (storedPrefs && (storedPrefs.theme === 'light' || storedPrefs.theme === 'dark')) {
+      currentTheme = storedPrefs.theme;
       followsSystemTheme = false;
     } else {
       currentTheme = await window.api.getSystemTheme();
       followsSystemTheme = true;
     }
   } catch (e) { /* 默认 light */ }
+  setAutoSaveEnabled(Boolean(storedPrefs && storedPrefs.autoSave));
+  editorFontPrefs = {
+    size: (storedPrefs && Number(storedPrefs.editorFontSize)) || 16,
+    family: (storedPrefs && storedPrefs.editorFontFamily) || '',
+  };
+  applyEditorFontPrefs();
   document.body.classList.toggle('theme-dark', currentTheme === 'dark');
   document.body.classList.toggle('theme-light', currentTheme === 'light');
   themeIconEl.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
@@ -1418,6 +1506,7 @@ async function init() {
   setStatus('已新建空白文档');
   setupContextMenu();
   watchEditorFocusLoss();
+  setupCodeCopyButtons();
 
   try {
     const startupDocument = await window.api.takeStartupDocument();
@@ -1435,6 +1524,119 @@ async function init() {
     pendingSystemDocumentPath = null;
     await openSystemDocument(filePath);
   }
+
+  // 崩溃恢复：存在备份时询问用户是否恢复（读取即清除，放弃则不保留）。
+  try {
+    const backup = await window.api.takeBackup();
+    if (backup && typeof backup.content === 'string' && backup.content !== '') {
+      const choice = await window.api.confirmBackupRestore(backup);
+      if (choice === 'restore') {
+        loadContent(backup.filePath, backup.content, backup.baseUrl);
+        lastSavedContent = '';
+        setDirty(true);
+        toast('已恢复上次未保存的内容');
+        setStatus('已恢复上次未保存的内容（Ctrl+S 保存）');
+      }
+    }
+  } catch (_) { /* 恢复流程失败不影响正常使用 */ }
+}
+
+// ============ 字号/字体 ============
+const FONT_FAMILY_VALUES = {
+  '': '',
+  'sans': '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+  'serif': 'Georgia, "Times New Roman", "Songti SC", SimSun, serif',
+  'mono': 'Consolas, "Courier New", monospace',
+};
+
+function applyEditorFontPrefs() {
+  const root = document.documentElement;
+  const size = Math.min(28, Math.max(12, Number(editorFontPrefs.size) || 16));
+  root.style.setProperty('--md-reader-font-size', `${size}px`);
+  const family = FONT_FAMILY_VALUES[editorFontPrefs.family];
+  if (family) root.style.setProperty('--md-reader-font-family', family);
+  else root.style.removeProperty('--md-reader-font-family');
+}
+
+// ============ 代码块复制按钮 ============
+// 所见即所得的代码块位于 ProseMirror 受管 DOM 内，直接插入子节点会被 PM 同步移除；
+// 因此用单个悬浮按钮覆盖在悬停的代码块右上角，源码预览与所见即所得两种模式通用。
+const codeCopyButton = document.createElement('button');
+codeCopyButton.type = 'button';
+codeCopyButton.className = 'code-block-copy-btn';
+codeCopyButton.textContent = '复制';
+let codeCopyTargetPre = null;
+
+function isCopyableCodePre(pre) {
+  return Boolean(pre && pre.textContent && pre.textContent.trim() &&
+    !pre.closest('.mermaid-diagram') && !pre.closest('.mermaid-wysiwyg-code-block'));
+}
+
+function hideCodeCopyButton() {
+  codeCopyTargetPre = null;
+  codeCopyButton.classList.remove('visible');
+}
+
+function positionCodeCopyButton(pre) {
+  codeCopyTargetPre = pre;
+  const rect = pre.getBoundingClientRect();
+  const buttonWidth = 56;
+  codeCopyButton.style.top = `${Math.round(Math.max(0, rect.top + 6))}px`;
+  codeCopyButton.style.left = `${Math.round(Math.max(8, rect.right - buttonWidth - 10))}px`;
+  codeCopyButton.classList.add('visible');
+}
+
+function copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => copyViaExecCommand(text));
+  }
+  return Promise.resolve(copyViaExecCommand(text));
+}
+
+function copyViaExecCommand(text) {
+  try {
+    const helper = document.createElement('textarea');
+    helper.value = text;
+    helper.style.position = 'fixed';
+    helper.style.opacity = '0';
+    document.body.appendChild(helper);
+    helper.select();
+    const ok = document.execCommand('copy');
+    helper.remove();
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+function setupCodeCopyButtons() {
+  codeCopyButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const pre = codeCopyTargetPre;
+    if (!pre) return;
+    const code = pre.querySelector('code') || pre;
+    const text = (code.textContent || '').replace(/\n$/, '');
+    copyTextToClipboard(text).then((ok) => {
+      codeCopyButton.textContent = ok ? '已复制' : '复制失败';
+      setTimeout(() => { codeCopyButton.textContent = '复制'; }, 1200);
+    });
+  });
+  document.addEventListener('mouseover', (event) => {
+    const pre = event.target && event.target.closest
+      ? event.target.closest('.toastui-editor-md-preview pre, .toastui-editor-ww-container pre')
+      : null;
+    if (!isCopyableCodePre(pre)) {
+      if (codeCopyTargetPre) hideCodeCopyButton();
+      return;
+    }
+    if (pre !== codeCopyTargetPre || !codeCopyButton.classList.contains('visible')) {
+      positionCodeCopyButton(pre);
+    }
+  });
+  // 悬浮按钮为 fixed 定位，滚动/缩放后位置失准，先隐藏待下次悬停重新定位。
+  window.addEventListener('scroll', hideCodeCopyButton, true);
+  window.addEventListener('resize', hideCodeCopyButton);
+  document.body.appendChild(codeCopyButton);
 }
 
 init();

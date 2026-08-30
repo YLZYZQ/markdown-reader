@@ -14,6 +14,17 @@ ipcMain.handle('export:document', (_event, format, markdown) => {
   return { canceled: false, filePath: 'C:\\tmp\\out.' + format };
 });
 ipcMain.handle('print:document', () => ({ canceled: false }));
+const backupWrites = [];
+ipcMain.on('backup:write', (_event, session) => backupWrites.push(session));
+ipcMain.on('backup:clear', () => backupWrites.push({ cleared: true }));
+ipcMain.handle('backup:take', () => null);
+ipcMain.handle('backup:confirmRestore', () => 'discard');
+ipcMain.handle('recent:get', () => []);
+const autoSaves = [];
+ipcMain.handle('file:save', async (_event, filePath, content) => {
+  autoSaves.push({ filePath, content });
+  return { canceled: false, filePath: filePath || 'C:\\fixture\\out.md', baseUrl: 'file:///C:/fixture/' };
+});
 ipcMain.handle('startup:takeDocument', () => ({ canceled: true }));
 ipcMain.handle('file:openPath', (_event, filePath) => ({
   filePath,
@@ -331,6 +342,23 @@ app.whenReady().then(async () => {
     rootResults.outlineWwJump = typeof wwOutlineSelection === 'number' && wwOutlineSelection > 0;
     document.getElementById('tab-files').click();
 
+    // —— 回归 v1.4：代码块复制按钮（悬浮式，mouseover 定位到 ww 代码块） ——
+    window.editor.setMarkdown('\`\`\`js\\nconst answer = 42;\\n\`\`\`', false);
+    await wait(300);
+    let copyButton = null;
+    const copyPre = document.querySelector('.toastui-editor-ww-container pre');
+    if (copyPre) copyPre.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    await wait(80);
+    copyButton = document.querySelector('.code-block-copy-btn.visible');
+    rootResults.copyButtonMounted = Boolean(copyButton);
+    rootResults.copyPreCount = document.querySelectorAll('.toastui-editor-ww-container pre').length;
+    rootResults.copyButtonCount = document.querySelectorAll('.code-block-copy-btn').length;
+    if (copyButton) copyButton.click();
+    await wait(150);
+    rootResults.copyButtonFeedback = copyButton ? copyButton.textContent : 'no-button';
+    await wait(150);
+    rootResults.copyButtonFeedback = copyButton ? copyButton.textContent : 'no-button';
+
     rootResults.modeBefore = document.getElementById('btn-mode').textContent;
     await activateContextItem(null, '切换源码模式');
     rootResults.modeAfter = document.getElementById('btn-mode').textContent;
@@ -536,6 +564,27 @@ app.whenReady().then(async () => {
   root.exportWired = exportCalls.length === 1 && exportCalls[0].format === 'pdf' &&
     exportCalls[0].markdownIsString === true;
 
+  // v1.4：字号/字体命令 → CSS 变量 + 偏好补丁
+  window.webContents.send('editor:command', 'setFontSize', { size: 20 });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  root.fontSizeVar = await window.webContents.executeJavaScript(
+    `document.documentElement.style.getPropertyValue('--md-reader-font-size')`);
+  window.webContents.send('editor:command', 'setFontFamily', { family: 'mono' });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  root.fontFamilyVar = await window.webContents.executeJavaScript(
+    `document.documentElement.style.getPropertyValue('--md-reader-font-family')`);
+  root.fontPrefPatches = prefPatches.some((p) => p && p.editorFontSize === 20) &&
+    prefPatches.some((p) => p && p.editorFontFamily === 'mono');
+
+  // v1.4：自动保存 + 备份写入（当前文档路径来自 system:openDocument 存根）
+  window.webContents.send('editor:command', 'autoSaveChanged', { enabled: true });
+  await window.webContents.executeJavaScript(`window.editor.setMarkdown('自动保存内容 v1.4', false)`);
+  await new Promise((resolve) => setTimeout(resolve, 3200)); // 1s 备份 + 2s 自动保存
+  root.backupWritten = backupWrites.some((s) => s && s.content === '自动保存内容 v1.4');
+  root.autoSaved = autoSaves.some((s) => s.content === '自动保存内容 v1.4' && s.filePath === 'C:\\fixture\\关联打开.md');
+  window.webContents.send('editor:command', 'autoSaveChanged', { enabled: false });
+  root.clipboardText = clipboard.readText();
+
   const regressionWork =
     root.mdFindCounter === '1/2' &&
     root.mdFindCounter2 === '2/2' &&
@@ -554,6 +603,14 @@ app.whenReady().then(async () => {
     root.outlineJumpLine === 5 &&
     root.outlineActiveIndex === '1' &&
     root.outlineWwJump === true &&
+    root.copyButtonMounted === true &&
+    root.copyButtonFeedback === '已复制' &&
+    root.clipboardText === 'const answer = 42;' &&
+    root.fontSizeVar === '20px' &&
+    root.fontFamilyVar === 'Consolas, "Courier New", monospace' &&
+    root.fontPrefPatches === true &&
+    root.backupWritten === true &&
+    root.autoSaved === true &&
     zoomText === '120%';
   if (!regressionWork) {
     finish(new Error(`UX regression: ${JSON.stringify({ root, zoomText })}`));

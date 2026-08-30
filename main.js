@@ -18,6 +18,8 @@ const { readDocumentContent } = require('./lib/doc-reader');
 const { createDocumentWatcher } = require('./lib/doc-watcher');
 const { resolveSaveChord } = require('./lib/save-chord');
 const { loadPreferences, savePreferences, boundsIntersectDisplay } = require('./lib/preferences');
+const { addRecentEntry, loadRecent, saveRecent } = require('./lib/recent');
+const { clearSessionBackup, readSessionBackup, writeSessionBackup } = require('./lib/session-backup');
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const authorizedDocumentPaths = new Set();
@@ -34,6 +36,35 @@ const preferencesFilePath = () => path.join(app.getPath('userData'), 'preference
 let preferences = loadPreferences(preferencesFilePath());
 let preferencesSaveTimer = null;
 let menuBuilt = false;
+
+// 最近打开记录，userData/recent.json。
+const recentFilePath = () => path.join(app.getPath('userData'), 'recent.json');
+let recentEntries = loadRecent(recentFilePath());
+let recentSaveTimer = null;
+
+function recordRecentDocument(filePath) {
+  try {
+    recentEntries = addRecentEntry(recentEntries, filePath, Date.now());
+    if (recentSaveTimer) clearTimeout(recentSaveTimer);
+    recentSaveTimer = setTimeout(() => {
+      recentSaveTimer = null;
+      try {
+        saveRecent(recentFilePath(), recentEntries);
+      } catch (error) {
+        console.warn('保存最近打开记录失败:', error);
+      }
+    }, 300);
+  } catch (_) { /* 记录失败不影响打开文档 */ }
+  if (menuBuilt) buildMenu();
+}
+
+function clearRecentDocuments() {
+  recentEntries = [];
+  try {
+    saveRecent(recentFilePath(), recentEntries);
+  } catch (_) { /* 忽略 */ }
+  if (menuBuilt) buildMenu();
+}
 
 // 局部更新偏好并防抖写盘；主题变化时重建菜单以刷新勾选态。
 function updatePreferences(patch) {
@@ -112,6 +143,7 @@ async function readDocument(filePath) {
   const { content } = await readDocumentContent(normalized);
   authorizeDocument(normalized);
   documentWatcher.watch(normalized);
+  recordRecentDocument(normalized);
   return {
     canceled: false,
     filePath: normalized,
@@ -277,6 +309,8 @@ function createWindow() {
         updatePreferences({ windowBounds: { ...bounds, maximized: mainWindow.isMaximized() } });
       }
     }
+    // 干净关闭（无未保存内容）时清除崩溃恢复备份。
+    if (!isDocumentDirty) clearSessionBackup(app.getPath('userData'));
     if (allowWindowClose || !isDocumentDirty) return;
     event.preventDefault();
     void promptForClose();
@@ -377,6 +411,7 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
     authorizeDocument(targetPath);
     await documentWatcher.markOwnWrite(targetPath);
     documentWatcher.watch(targetPath);
+    recordRecentDocument(targetPath);
     return {
       canceled: false,
       filePath: targetPath,
@@ -419,6 +454,56 @@ ipcMain.handle('prefs:getAll', (event) => {
 ipcMain.on('prefs:set', (event, patch) => {
   if (!isCurrentRenderer(event) || !patch || typeof patch !== 'object' || Array.isArray(patch)) return;
   updatePreferences(patch);
+});
+
+// ============ 崩溃恢复备份与最近打开 ============
+ipcMain.on('backup:write', (event, session) => {
+  if (!isCurrentRenderer(event)) return;
+  try {
+    writeSessionBackup(app.getPath('userData'), session);
+  } catch (error) {
+    console.warn('写入崩溃恢复备份失败:', error);
+  }
+});
+
+ipcMain.on('backup:clear', (event) => {
+  if (isCurrentRenderer(event)) clearSessionBackup(app.getPath('userData'));
+});
+
+// 读取并立即清除备份（恢复与否由用户决定，读取后不再保留）。
+ipcMain.handle('backup:take', (event) => {
+  if (!isCurrentRenderer(event)) return null;
+  try {
+    return readSessionBackup(app.getPath('userData'));
+  } finally {
+    clearSessionBackup(app.getPath('userData'));
+  }
+});
+
+ipcMain.handle('backup:confirmRestore', async (event, info) => {
+  if (!isCurrentRenderer(event)) return 'discard';
+  if (!mainWindow || mainWindow.isDestroyed()) return 'discard';
+  const detailParts = [];
+  if (info && Number.isFinite(info.savedAt) && info.savedAt > 0) {
+    detailParts.push(`最后修改：${new Date(info.savedAt).toLocaleString('zh-CN')}`);
+  }
+  detailParts.push(info && info.filePath ? `文档：${info.filePath}` : '文档：未命名（未保存过）');
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: '恢复未保存内容',
+    message: '检测到上次未保存的内容',
+    detail: detailParts.join('\n') + '\n\n是否恢复到编辑器？',
+    buttons: ['恢复', '放弃'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  });
+  return result.response === 0 ? 'restore' : 'discard';
+});
+
+ipcMain.handle('recent:get', (event) => {
+  if (!isCurrentRenderer(event)) return [];
+  return recentEntries.map((entry) => ({ ...entry }));
 });
 
 // ============ 打印与导出 ============
@@ -609,6 +694,21 @@ function buildMenu() {
           ]
         },
         { type: 'separator' },
+        {
+          label: '最近打开',
+          submenu: recentEntries.length ? [
+            ...recentEntries.map((entry) => ({
+              label: path.basename(entry.path),
+              click: () => {
+                queueSystemDocument(entry.path);
+                focusMainWindow();
+              }
+            })),
+            { type: 'separator' },
+            { label: '清除最近打开记录', click: clearRecentDocuments },
+          ] : [{ label: '（暂无记录）', enabled: false }]
+        },
+        { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit', label: '退出' }
       ]
     },
@@ -685,6 +785,38 @@ function buildMenu() {
             updatePreferences({ theme: 'system' });
             mainWindow?.webContents.send('editor:command', 'followSystemTheme');
           }
+        },
+        {
+          label: '自动保存',
+          type: 'checkbox',
+          checked: preferences.autoSave === true,
+          click: () => {
+            const next = !(preferences.autoSave === true);
+            updatePreferences({ autoSave: next });
+            sendCommand('autoSaveChanged', { enabled: next });
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '字号',
+          submenu: [14, 16, 18, 20, 22, 24].map((size) => ({
+            label: `${size} px`,
+            type: 'radio',
+            checked: (preferences.editorFontSize || 16) === size,
+            click: () => {
+              updatePreferences({ editorFontSize: size });
+              sendCommand('setFontSize', { size });
+            }
+          })),
+        },
+        {
+          label: '正文字体',
+          submenu: [
+            { label: '跟随主题', type: 'radio', checked: !preferences.editorFontFamily, click: () => { updatePreferences({ editorFontFamily: '' }); sendCommand('setFontFamily', { family: '' }); } },
+            { label: '无衬线', type: 'radio', checked: preferences.editorFontFamily === 'sans', click: () => { updatePreferences({ editorFontFamily: 'sans' }); sendCommand('setFontFamily', { family: 'sans' }); } },
+            { label: '衬线', type: 'radio', checked: preferences.editorFontFamily === 'serif', click: () => { updatePreferences({ editorFontFamily: 'serif' }); sendCommand('setFontFamily', { family: 'serif' }); } },
+            { label: '等宽', type: 'radio', checked: preferences.editorFontFamily === 'mono', click: () => { updatePreferences({ editorFontFamily: 'mono' }); sendCommand('setFontFamily', { family: 'mono' }); } },
+          ],
         },
         { type: 'separator' },
         { label: '放大', accelerator: 'CmdOrCtrl+=', click: () => changeZoom(0.5) },

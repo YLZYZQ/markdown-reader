@@ -439,6 +439,34 @@ body.theme-light .toastui-editor-main .ProseMirror {
   background: var(--bg) !important;
 }
 
+/* ============ 字号/字体偏好 ============ */
+.toastui-editor .ProseMirror,
+.toastui-editor-md-preview .toastui-editor-contents {
+  font-size: var(--md-reader-font-size, 16px);
+  font-family: var(--md-reader-font-family, inherit);
+}
+
+/* ============ 代码块复制按钮（悬浮式） ============ */
+.code-block-copy-btn {
+  position: fixed;
+  z-index: 800;
+  padding: 2px 10px;
+  border: 1px solid var(--titlebar-border);
+  border-radius: 5px;
+  background: var(--titlebar-bg);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.code-block-copy-btn.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.code-block-copy-btn:hover { background: var(--btn-bg-hover); color: var(--fg); }
+
 /* ============ 查找与替换 ============ */
 .find-panel {
   position: fixed;
