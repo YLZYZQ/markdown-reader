@@ -559,7 +559,7 @@ function jumpToHeading(index) {
   const entry = outlineEntries[index];
   if (!entry) return;
   if (currentEditMode === 'markdown') {
-    // 源码模式 setSelection 使用 1-based [行, 列]，自带滚动定位。
+    // 源码模式 setSelection 使用 1-based [行, 列]。
     editor.setSelection([entry.line, 1], [entry.line, 1]);
   } else {
     const pos = wwHeadingPosition(index);
@@ -570,6 +570,7 @@ function jumpToHeading(index) {
     editor.setSelection(pos, pos);
   }
   editor.focus();
+  scrollEditorSelectionIntoView();
 }
 
 // 所见即所得模式的 heading 节点按文档序与 markdown 标题一一对应。
@@ -999,8 +1000,9 @@ function modePositionForIndex(visible, index) {
   return last ? last.pos + (last.end - last.start) : 0;
 }
 
-// 高亮第 n 个匹配：源码模式用 [行, 列]，所见即所得模式用文档偏移量；
-// Toast UI 的 setSelection 两种模式都会自动把选区滚动到可视区。
+// 高亮第 n 个匹配：源码模式用 [行, 列]，所见即所得模式用文档偏移量。
+// Toast UI 的 setSelection 两种模式自带 scrollIntoView，但焦点在查找输入框
+// （编辑器未聚焦）时 ProseMirror 不会滚动，因此高亮后需手动滚入视区。
 function highlightMatch(visible, match) {
   const startIndex = match.index;
   const endIndex = match.index + Math.max(match.length, 1);
@@ -1011,6 +1013,30 @@ function highlightMatch(visible, match) {
   } else {
     editor.setSelection(modePositionForIndex(visible, startIndex), modePositionForIndex(visible, endIndex));
   }
+  scrollEditorSelectionIntoView();
+}
+
+// 把当前 PM 选区滚动到编辑器可视区约 1/3 高度处（已可见则不动）。
+// 不依赖编辑器焦点，覆盖查找面板/大纲面板持有焦点的场景。
+function scrollEditorSelectionIntoView() {
+  let view = null;
+  try {
+    view = editor.getCurrentModeEditor().view;
+  } catch (_) { return; }
+  if (!view || !view.dom) return;
+  try {
+    const coords = view.coordsAtPos(view.state.selection.head);
+    let scroller = view.dom;
+    while (scroller && scroller !== document.body) {
+      if (scroller.scrollHeight > scroller.clientHeight + 4 &&
+          /(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) break;
+      scroller = scroller.parentElement;
+    }
+    if (!scroller || scroller === document.body) return;
+    const rect = scroller.getBoundingClientRect();
+    if (coords.top >= rect.top && coords.bottom <= rect.bottom) return; // 已在可视区
+    scroller.scrollTop += coords.top - rect.top - rect.height * 0.35;
+  } catch (_) { /* 滚动失败不影响查找结果 */ }
 }
 
 function updateFindCount() {

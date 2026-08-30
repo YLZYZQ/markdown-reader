@@ -342,6 +342,33 @@ app.whenReady().then(async () => {
     rootResults.outlineWwJump = typeof wwOutlineSelection === 'number' && wwOutlineSelection > 0;
     document.getElementById('tab-files').click();
 
+    // —— 回归：查找跳转必须把匹配位置滚进可视区（不依赖编辑器焦点） ——
+    window.editor.changeMode('wysiwyg');
+    await wait(150);
+    const jumpParas = [];
+    for (let i = 0; i < 200; i += 1) jumpParas.push('段落' + i + ' 普通填充内容');
+    jumpParas.push('末尾段落 needleMarker 在这里');
+    window.editor.setMarkdown(jumpParas.join('\\n\\n'), false);
+    await wait(250);
+    document.getElementById('btn-find').click();
+    findInput.value = 'needleMarker';
+    findInput.dispatchEvent(new Event('input', { bubbles: true }));
+    // 隐藏窗口冻结真实滚动，用属性拦截验证滚动指令已发出
+    const jumpScroller = Array.from(document.querySelectorAll('.toastui-editor .ProseMirror'))
+      .find((el) => el.offsetParent !== null);
+    const jumpWrites = [];
+    Object.defineProperty(jumpScroller, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: (v) => jumpWrites.push(Math.round(v))
+    });
+    document.getElementById('btn-find-next').click();
+    await wait(150);
+    delete jumpScroller.scrollTop;
+    rootResults.findJumpWrites = jumpWrites.length;
+    rootResults.findScrolled = jumpWrites.some((v) => v > 1000);
+    document.getElementById('btn-find-close').click();
+
     // —— 回归 v1.4：代码块复制按钮（悬浮式，mouseover 定位到 ww 代码块） ——
     window.editor.setMarkdown('\`\`\`js\\nconst answer = 42;\\n\`\`\`', false);
     await wait(300);
@@ -606,6 +633,7 @@ app.whenReady().then(async () => {
     root.copyButtonMounted === true &&
     root.copyButtonFeedback === '已复制' &&
     root.clipboardText === 'const answer = 42;' &&
+    root.findScrolled === true &&
     root.fontSizeVar === '20px' &&
     root.fontFamilyVar === 'Consolas, "Courier New", monospace' &&
     root.fontPrefPatches === true &&
