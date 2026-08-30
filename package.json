@@ -1,6 +1,6 @@
 {
   "name": "md-reader",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "一个像 Typora 的 Markdown 阅读器/编辑器（Electron + Toast UI Editor，免安装）",
   "main": "main.js",
   "author": "",
