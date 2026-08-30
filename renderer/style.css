@@ -446,6 +446,65 @@ body.theme-light .toastui-editor-main .ProseMirror {
   font-family: var(--md-reader-font-family, inherit);
 }
 
+/* ============ 阅读排版优化 ============ */
+/* 阅读列宽：过长的行大幅拉低可读性；以 em 为单位随用户字号设置缩放 */
+.toastui-editor-contents {
+  max-width: 48em;
+  margin-inline: auto;
+  padding: 16px 40px 72px;
+  line-height: 1.8;
+  word-break: break-word;
+}
+/* 段落与标题 */
+.toastui-editor-contents p { margin: 0.4em 0; }
+.toastui-editor-contents h1 { font-size: 1.9em; margin: 1em 0 0.5em; }
+.toastui-editor-contents h2 { font-size: 1.45em; margin: 1.4em 0 0.5em; }
+.toastui-editor-contents h3 { font-size: 1.2em; margin: 1.2em 0 0.45em; }
+.toastui-editor-contents h4 { font-size: 1.08em; margin: 1em 0 0.4em; }
+.toastui-editor-contents h5,
+.toastui-editor-contents h6 { font-size: 1em; margin: 1em 0 0.4em; }
+.toastui-editor-contents h1,
+.toastui-editor-contents h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--titlebar-border);
+}
+/* 列表：条目之间留出呼吸感 */
+.toastui-editor-contents ul,
+.toastui-editor-contents ol { margin: 0.4em 0; padding-left: 1.8em; }
+.toastui-editor-contents li { margin: 0.35em 0; }
+.toastui-editor-contents li > p { margin: 0.15em 0; }
+/* 行内代码：弱化为中性底色，消除大段技术文档里的粉色噪音 */
+.toastui-editor-contents code {
+  color: inherit;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border: 0;
+  border-radius: 4px;
+  padding: 0.125em 0.4em;
+  font-size: 0.875em;
+}
+.toastui-editor-contents pre code {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  font-size: inherit;
+}
+/* 引用块：accent 左缘 + 轻底色，替代整块灰 */
+.toastui-editor-contents blockquote {
+  margin: 0.8em 0;
+  padding: 6px 16px;
+  border: 0;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.toastui-editor-contents blockquote p { margin: 0.3em 0; }
+/* 代码块与分割线 */
+.toastui-editor-contents pre {
+  margin: 0.9em 0;
+  line-height: 1.65;
+}
+.toastui-editor-contents hr { margin: 1.8em 0; }
+
 /* ============ 代码块复制按钮（悬浮式） ============ */
 .code-block-copy-btn {
   position: fixed;
