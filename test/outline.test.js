@@ -78,3 +78,29 @@ test('empty and non-string inputs return empty array', () => {
   assert.deepEqual(extractOutline(null), []);
   assert.deepEqual(extractOutline(undefined), []);
 });
+
+test('setext headings are extracted with text line numbers', () => {
+  const outline = extractOutline('# 一\n\n正文段落\n\nSetext 标题\n---\n\nAnother\n===\n\n尾部正文');
+  assert.deepEqual(outline, [
+    { level: 1, text: '一', line: 1 },
+    { level: 2, text: 'Setext 标题', line: 5 },
+    { level: 1, text: 'Another', line: 8 },
+  ]);
+});
+
+test('thematic breaks without preceding text are not setext headings', () => {
+  assert.deepEqual(extractOutline('---\n\n正文\n\n***'), []);
+  assert.deepEqual(extractOutline('正文\n\n---'), []);
+});
+
+test('headings, list items and fences are not consumed as setext text', () => {
+  assert.deepEqual(extractOutline('# 标题\n---'), [
+    { level: 1, text: '标题', line: 1 },
+  ]);
+  assert.deepEqual(extractOutline('- 列表项\n---'), []);
+});
+
+test('setext heading inside fence is ignored', () => {
+  const outline = extractOutline('```\n围栏内\n---\n```');
+  assert.deepEqual(outline, []);
+});

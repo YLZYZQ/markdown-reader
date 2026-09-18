@@ -113,3 +113,16 @@ test('v1.4 invalid values fall back (font size clamp, family whitelist, autoSave
   assert.equal(prefs.editorFontSize, 28);
   assert.equal(prefs.editorFontFamily, '');
 });
+
+test('readingLineWidth accepts only 640/780/960', () => {
+  assert.equal(sanitizePreferences({ readingLineWidth: 960 }).readingLineWidth, 960);
+  assert.equal(sanitizePreferences({ readingLineWidth: '780' }).readingLineWidth, 780);
+  assert.equal(sanitizePreferences({ readingLineWidth: 800 }).readingLineWidth, 780);
+  assert.equal(sanitizePreferences({ readingLineWidth: 'wide' }).readingLineWidth, 780);
+});
+
+test('typewriterMode only accepts true', () => {
+  assert.equal(sanitizePreferences({ typewriterMode: true }).typewriterMode, true);
+  assert.equal(sanitizePreferences({ typewriterMode: false }).typewriterMode, false);
+  assert.equal(sanitizePreferences({ typewriterMode: 'yes' }).typewriterMode, false);
+});

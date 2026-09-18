@@ -14,7 +14,9 @@
     "dist": "electron-builder --win",
     "dist:installer": "node scripts/build-windows-installer.js",
     "dist:portable": "node scripts/build-windows-portable.js",
-    "dist:dir": "electron-builder --win --dir"
+    "dist:dir": "electron-builder --win --dir",
+    "test:reading": "electron test/reading-electron.js",
+    "test:search": "electron test/search-electron.js"
   },
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",

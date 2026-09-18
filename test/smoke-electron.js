@@ -206,7 +206,9 @@ app.whenReady().then(async () => {
     await activateContextItem(null, '切换主题');
     rootResults.themeAfter = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
 
-    window.editor.setMarkdown('', false);
+    // 与应用真实换文档路径一致：replaceEditorContent 重建编辑器并清空撤销历史，
+    // 防止 Ctrl+Z 把上一份文档的内容带回新文档。
+    replaceEditorContent('');
     window.editor.insertText('撤销测试');
     await activateContextItem(null, '撤销');
     rootResults.afterUndo = window.editor.getMarkdown();
@@ -219,6 +221,8 @@ app.whenReady().then(async () => {
     const replaceInput = document.getElementById('replace-input');
     findInput.value = 'alpha';
     findInput.dispatchEvent(new Event('input', { bubbles: true }));
+    // 输入即跳转：输入事件后应立即定位到第 1 处命中。
+    rootResults.findLiveJump = document.getElementById('find-count').textContent;
     replaceInput.value = 'beta';
     document.getElementById('btn-find-next').click();
     rootResults.findCount = document.getElementById('find-count').textContent;
@@ -227,8 +231,8 @@ app.whenReady().then(async () => {
     document.getElementById('btn-find-close').click();
 
     // —— 回归：全部替换后保持滚动位置 ——
-    // 隐藏窗口不产帧（rAF 回调不执行、滚动偏移冻结），因此用属性拦截 +
-    // 手动清空 rAF 队列的方式验证"捕获→替换→写回"恢复管线。
+    // 隐藏窗口不产帧（rAF 回调不执行、滚动偏移冻结），因此用属性拦截验证
+    // 替换过程不发出滚动指令（PM 事务不触碰 scrollTop，位置天然保持）。
     const longParas = Array.from({ length: 120 }, (_, i) => '段落' + i + ' 目标词').join('\\n\\n');
     window.editor.setMarkdown(longParas, false);
     await wait(200);
@@ -248,12 +252,15 @@ app.whenReady().then(async () => {
     findInput.dispatchEvent(new Event('input', { bubbles: true }));
     document.getElementById('btn-find-expand').click();
     replaceInput.value = '已替换';
+    // 输入即跳转的定位滚动发生在拦截安装之前已同步完成；此处再清一次记录，
+    // 只观察“全部替换”本身是否发出滚动指令（发出即位置丢失）。
+    scrollWrites.length = 0;
     document.getElementById('btn-replace-all').click();
     // 手动执行排队的 rAF（真实窗口由帧调度执行）
     while (queuedRafs.length) queuedRafs.shift()(performance.now());
     window.requestAnimationFrame = originalRaf;
     rootResults.replaceAllScrollWrites = scrollWrites.join(',');
-    rootResults.replaceAllKeptScroll = scrollWrites.includes(1500);
+    rootResults.replaceAllKeptScroll = scrollWrites.every((value) => value === 1500);
     delete scroller.scrollTop; // 移除属性拦截，恢复原型访问器
     document.getElementById('btn-find-close').click();
 
@@ -266,12 +273,15 @@ app.whenReady().then(async () => {
     findInput.dispatchEvent(new Event('input', { bubbles: true }));
     document.getElementById('btn-find-next').click();
     await wait(80);
-    const mdSel = window.getSelection();
+    // 新查找机制用 CSS Custom Highlight 标记命中，不占用 DOM 选区；
+    // 用高亮 Range 的容器判断命中落在源码编辑器还是右侧预览。
+    const mdHighlight = [...(CSS.highlights.get('search-current') || [])][0];
+    const mdHighlightElement = mdHighlight && mdHighlight.startContainer.nodeType === Node.ELEMENT_NODE
+      ? mdHighlight.startContainer
+      : mdHighlight && mdHighlight.startContainer.parentElement;
     rootResults.mdFindCounter = document.getElementById('find-count').textContent;
-    rootResults.mdFindAnchorInPreview = Boolean(mdSel.anchorNode && mdSel.anchorNode.parentElement &&
-      mdSel.anchorNode.parentElement.closest('.toastui-editor-md-preview'));
-    rootResults.mdFindAnchorInSource = Boolean(mdSel.anchorNode && mdSel.anchorNode.parentElement &&
-      mdSel.anchorNode.parentElement.closest('.ProseMirror'));
+    rootResults.mdFindAnchorInPreview = Boolean(mdHighlightElement && mdHighlightElement.closest('.toastui-editor-md-preview'));
+    rootResults.mdFindAnchorInSource = Boolean(mdHighlightElement && mdHighlightElement.closest('.ProseMirror'));
     document.getElementById('btn-find-next').click();
     await wait(80);
     rootResults.mdFindCounter2 = document.getElementById('find-count').textContent;
@@ -352,8 +362,8 @@ app.whenReady().then(async () => {
     await wait(250);
     document.getElementById('btn-find').click();
     findInput.value = 'needleMarker';
-    findInput.dispatchEvent(new Event('input', { bubbles: true }));
-    // 隐藏窗口冻结真实滚动，用属性拦截验证滚动指令已发出
+    // 隐藏窗口冻结真实滚动，用属性拦截验证滚动指令已发出。
+    // 输入即跳转：拦截需在 input 事件之前安装，才能捕获首次定位的大幅滚动。
     const jumpScroller = Array.from(document.querySelectorAll('.toastui-editor .ProseMirror'))
       .find((el) => el.offsetParent !== null);
     const jumpWrites = [];
@@ -362,12 +372,14 @@ app.whenReady().then(async () => {
       get: () => 0,
       set: (v) => jumpWrites.push(Math.round(v))
     });
+    findInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await wait(150);
     document.getElementById('btn-find-next').click();
     await wait(150);
     delete jumpScroller.scrollTop;
     rootResults.findJumpWrites = jumpWrites.length;
     rootResults.findScrolled = jumpWrites.some((v) => v > 1000);
-    rootResults.findHighlightBoxes = document.querySelectorAll('.match-highlight-box').length;
+    rootResults.findHighlightActive = CSS.highlights.has('search-current');
     document.getElementById('btn-find-close').click();
 
     // —— 回归 v1.4：代码块复制按钮（悬浮式，mouseover 定位到 ww 代码块） ——
@@ -375,15 +387,14 @@ app.whenReady().then(async () => {
     await wait(300);
     let copyButton = null;
     const copyPre = document.querySelector('.toastui-editor-ww-container pre');
+    // 悬浮按钮在任何滚动事件后都会先隐藏（fixed 定位失准防护），
+    // 断言需在 mouseover 派发后同步读取，避免与延迟滚动事件竞态。
     if (copyPre) copyPre.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    await wait(80);
     copyButton = document.querySelector('.code-block-copy-btn.visible');
     rootResults.copyButtonMounted = Boolean(copyButton);
     rootResults.copyPreCount = document.querySelectorAll('.toastui-editor-ww-container pre').length;
     rootResults.copyButtonCount = document.querySelectorAll('.code-block-copy-btn').length;
     if (copyButton) copyButton.click();
-    await wait(150);
-    rootResults.copyButtonFeedback = copyButton ? copyButton.textContent : 'no-button';
     await wait(150);
     rootResults.copyButtonFeedback = copyButton ? copyButton.textContent : 'no-button';
 
@@ -567,7 +578,8 @@ app.whenReady().then(async () => {
     root.themeBefore === root.themeAfter ||
     root.afterUndo !== '' ||
     root.afterRedo !== '撤销测试' ||
-    root.findCount !== '1/2' ||
+    root.findLiveJump !== '1/2' ||
+    root.findCount !== '2/2' ||
     root.replaced !== '查找 beta，再次 beta' ||
     root.modeBefore === root.modeAfter ||
     root.sidebarBefore === root.sidebarAfter ||
@@ -614,8 +626,8 @@ app.whenReady().then(async () => {
   root.clipboardText = clipboard.readText();
 
   const regressionWork =
-    root.mdFindCounter === '1/2' &&
-    root.mdFindCounter2 === '2/2' &&
+    root.mdFindCounter === '2/2' &&
+    root.mdFindCounter2 === '1/2' &&
     root.mdFindAnchorInPreview === false &&
     root.mdFindAnchorInSource === true &&
     root.escapeClosesFind === true &&
@@ -635,7 +647,7 @@ app.whenReady().then(async () => {
     root.copyButtonFeedback === '已复制' &&
     root.clipboardText === 'const answer = 42;' &&
     root.findScrolled === true &&
-    root.findHighlightBoxes >= 1 &&
+    root.findHighlightActive === true &&
     root.fontSizeVar === '20px' &&
     root.fontFamilyVar === 'Consolas, "Courier New", monospace' &&
     root.fontPrefPatches === true &&

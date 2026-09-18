@@ -30,7 +30,7 @@
   <header class="titlebar">
     <div class="title-left">
       <button id="btn-sidebar" class="tb-btn icon-btn sidebar-toggle" title="显示/隐藏文件侧边栏 (Ctrl+Shift+E)" aria-label="显示或隐藏文件侧边栏" aria-expanded="true">☰</button>
-      <span class="file-icon" aria-hidden="true">📄</span>
+      <span class="file-icon" aria-hidden="true">M↓</span>
       <span id="filename" class="filename">未命名.md</span>
     </div>
     <div class="title-right">
@@ -40,8 +40,10 @@
       <span class="tb-separator" aria-hidden="true"></span>
       <button id="btn-find" class="tb-btn icon-btn" title="查找 (Ctrl+F)" aria-label="查找">⌕</button>
       <button id="btn-mode" class="tb-btn mode-btn" title="切换源码模式 (Ctrl+/)">源码</button>
-      <button id="btn-theme" class="tb-btn icon-btn" title="切换主题 (Ctrl+Shift+T)">
-        <span id="theme-icon">🌙</span>
+      <button id="btn-focus" class="tb-btn" title="专注模式 (F8)" aria-pressed="false">专注</button>
+      <button id="btn-reading-settings" class="tb-btn" aria-expanded="false" aria-controls="reading-settings">排版</button>
+      <button id="btn-theme" class="tb-btn icon-btn" title="切换主题 (Ctrl+Shift+T)" aria-label="切换主题">
+        <span id="theme-icon" aria-hidden="true">◐</span>
       </button>
     </div>
   </header>
@@ -72,6 +74,16 @@
     <div id="editor"></div>
   </main>
 
+  <!-- 阅读与排版设置 -->
+  <section id="reading-settings" class="reading-settings" aria-label="阅读与排版" hidden>
+    <h2>阅读与排版</h2>
+    <div class="settings-row"><label for="font-size">正文字号</label><select id="font-size"><option value="14">14 px</option><option value="16">16 px · 舒适</option><option value="18">18 px</option><option value="20">20 px · 大字</option><option value="22">22 px</option></select></div>
+    <div class="settings-row"><label for="line-width">正文宽度</label><select id="line-width"><option value="640">窄 · 640 px</option><option value="780">标准 · 780 px</option><option value="960">宽 · 960 px</option></select></div>
+    <div class="settings-row"><label for="theme-select">外观</label><select id="theme-select"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
+    <div class="settings-row"><label for="typewriter-toggle">打字机模式 <small>光标保持居中</small></label><input id="typewriter-toggle" type="checkbox" /></div>
+    <p>专注模式 F8 · 退出专注 Esc<br />显示偏好会自动记住。</p>
+  </section>
+
   <!-- 查找与替换面板 -->
   <section id="find-panel" class="find-panel" aria-label="查找与替换" hidden>
     <div class="find-row">
@@ -93,9 +105,13 @@
 
   <!-- 底部状态栏 -->
   <footer class="statusbar">
-    <span id="status-info" class="status-left">就绪</span>
+    <div class="status-left">
+      <span id="status-info">就绪</span>
+      <span id="reading-progress" title="当前文档阅读进度">0%</span>
+    </div>
     <div class="status-right">
       <span id="cursor-pos" title="光标位置"></span>
+      <span id="reading-time" title="预计阅读时间"></span>
       <span id="word-count" class="word-count">0 字</span>
       <span id="zoom-level" title="缩放级别"></span>
     </div>
@@ -109,6 +125,7 @@
     </div>
   </div>
 
+  <script src="reading-experience.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

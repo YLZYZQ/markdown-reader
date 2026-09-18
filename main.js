@@ -773,6 +773,7 @@ function buildMenu() {
       submenu: [
         { label: '显示/隐藏文件侧边栏', accelerator: 'CmdOrCtrl+Shift+E', click: () => sendCommand('toggleSidebar') },
         { label: '大纲面板', accelerator: 'CmdOrCtrl+Shift+O', click: () => sendCommand('showOutline') },
+        { label: '专注模式', accelerator: 'F8', click: () => sendCommand('toggleFocus') },
         { type: 'separator' },
         { label: '切换源码/所见即所得', accelerator: 'CmdOrCtrl+/', click: () => sendCommand('toggleMode') },
         { type: 'separator' },

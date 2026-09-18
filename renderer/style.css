@@ -3,44 +3,62 @@
   --tb-h: 44px;
   --sb-h: 26px;
   --sidebar-w: 252px;
+  --reading-width: 780px;
+  --reading-leading: 1.9;
+  --reading-serif: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --reading-mono: "SFMono-Regular", Consolas, "Liberation Mono", "Microsoft YaHei Mono", monospace;
 }
 
-/* 亮色主题 */
+/* 亮色主题（暖纸色） */
 body.theme-light {
-  --bg: #ffffff;
-  --fg: #1f2328;
-  --muted: #656d76;
-  --titlebar-bg: #f6f8fa;
-  --titlebar-border: #d0d7de;
+  color-scheme: light;
+  --bg: #fffdf8;
+  --fg: #292720;
+  --muted: #777169;
+  --titlebar-bg: #f7f3eb;
+  --titlebar-border: #e5ded2;
   --btn-bg: transparent;
-  --btn-bg-hover: #eaeef2;
-  --accent: #0969da;
-  --statusbar-bg: #f6f8fa;
-  --statusbar-border: #d0d7de;
-  --editor-bg: #ffffff;
-  --overlay-border: #c7cdd4;
-  --overlay-shadow: 0 8px 28px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.08);
-  --drop-bg: rgba(9, 105, 218, 0.12);
-  --drop-border: #0969da;
+  --btn-bg-hover: #eee7db;
+  --accent: #9a5b36;
+  --statusbar-bg: #f7f3eb;
+  --statusbar-border: #e5ded2;
+  --editor-bg: #fffdf8;
+  --overlay-border: #d8cfbf;
+  --overlay-shadow: 0 8px 28px rgba(60, 45, 20, 0.16), 0 2px 8px rgba(60, 45, 20, 0.08);
+  --drop-bg: rgba(154, 91, 54, 0.12);
+  --drop-border: #9a5b36;
+  --reading-surface: #fffdf8;
+  --reading-rule: #e9e1d5;
+  --reading-quote: #f6f0e6;
+  --reading-code: #f5efe5;
+  --reading-table-head: #f3ecdf;
+  --reading-selection: #ead1bb;
 }
 
-/* 暗色主题（参照 Obsidian 调色） */
+/* 暗色主题（暖深色） */
 body.theme-dark {
-  --bg: #191919;
-  --fg: #d4d4d4;
-  --muted: #9a9a9a;
-  --titlebar-bg: #202020;
-  --titlebar-border: #333333;
+  color-scheme: dark;
+  --bg: #211f1b;
+  --fg: #e6dfd3;
+  --muted: #aaa195;
+  --titlebar-bg: #2a2722;
+  --titlebar-border: #443e35;
   --btn-bg: transparent;
-  --btn-bg-hover: #2a2a2a;
-  --accent: #7aa2f7;
-  --statusbar-bg: #1f1f1f;
-  --statusbar-border: #333333;
-  --editor-bg: #121212;
-  --overlay-border: #454545;
+  --btn-bg-hover: #3a352e;
+  --accent: #d49b6a;
+  --statusbar-bg: #2a2722;
+  --statusbar-border: #443e35;
+  --editor-bg: #211f1b;
+  --overlay-border: #574f43;
   --overlay-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --drop-bg: rgba(122, 162, 247, 0.12);
-  --drop-border: #7aa2f7;
+  --drop-bg: rgba(212, 155, 106, 0.15);
+  --drop-border: #d49b6a;
+  --reading-surface: #211f1b;
+  --reading-rule: #443e35;
+  --reading-quote: #2c2822;
+  --reading-code: #2c2822;
+  --reading-table-head: #342f28;
+  --reading-selection: #674b36;
 }
 
 /* ============ 基础重置 ============ */
@@ -271,27 +289,29 @@ body {
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
-  padding: 5px 8px 0;
+  padding: 6px 8px 0;
   border-bottom: 1px solid var(--titlebar-border);
   min-width: var(--sidebar-w);
 }
 .sidebar-tab {
   flex: 1;
-  height: 26px;
+  min-height: 30px;
   border: 0;
-  border-radius: 6px 6px 0 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
-  transition: background 0.12s ease, color 0.12s ease;
 }
 .sidebar-tab:hover { background: var(--btn-bg-hover); color: var(--fg); }
-.sidebar-tab.active {
+.sidebar-tab.active,
+.sidebar-tab[aria-selected="true"] {
   color: var(--accent);
   font-weight: 600;
-  box-shadow: inset 0 -2px 0 var(--accent);
+  border-bottom-color: var(--accent);
+  box-shadow: none;
 }
 #outline-panel {
   flex: 1;
@@ -345,11 +365,8 @@ body {
 /* ============ Toast UI Editor 适配 ============ */
 #editor { height: 100%; }
 
-/* 平滑滚动 */
-.toastui-editor-ww-container,
-.toastui-editor-ww-container .ProseMirror {
-  scroll-behavior: smooth;
-}
+/* 查找跳转/大纲定位直接写入 scrollTop 并按写入后的几何计算下一次定位，
+   必须瞬时生效（scroll-behavior: smooth 会让连续定位漂移）。 */
 
 /* 编辑器滚动条更精致 */
 .toastui-editor-ww-container::-webkit-scrollbar,
@@ -432,6 +449,8 @@ body {
 #editor .toastui-editor-defaultUI-toolbar {
   background: var(--titlebar-bg) !important;
   border-bottom: 1px solid var(--titlebar-border) !important;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 /* 编辑区背景跟随主题（暗色由 toastui-editor-dark.css 处理，这里补亮色） */
 body.theme-light .toastui-editor-main .toastui-editor-ww,
@@ -452,24 +471,39 @@ body.theme-light .toastui-editor-main .ProseMirror {
 .toastui-editor .ProseMirror::selection {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
-/* 阅读列宽：过长的行大幅拉低可读性；以 em 为单位随用户字号设置缩放。
-   注意必须用显式 width（而非 max-width）+ auto 边距，否则不会居中。 */
+/* 阅读列宽：过长的行大幅拉低可读性。以左右 padding 收窄内容列并自动居中，
+   宽度由偏好 --reading-width（640/780/960 px）控制。 */
 .toastui-editor-contents {
-  width: min(48em, 100%);
+  width: 100%;
   margin-inline: auto;
-  padding: 16px 40px 72px;
-  line-height: 1.8;
+  padding: 16px max(28px, calc((100% - var(--reading-width)) / 2)) 72px;
+  line-height: var(--reading-leading);
   word-break: break-word;
 }
 /* 所见即所得模式：Toast UI 用 (0,2,0) 的规则设了 margin:0 和自己的 padding，
    必须用同等优先级的选择器覆盖，否则居中失效（列贴左侧、右侧大片留白）。 */
 .toastui-editor-ww-container .toastui-editor-contents {
-  width: min(48em, 100%);
+  width: 100%;
   margin-inline: auto;
-  padding: 16px 40px 72px;
+  padding: clamp(36px, 6vh, 72px) max(28px, calc((100% - var(--reading-width)) / 2)) 96px;
+  color: var(--fg);
+  font-family: var(--reading-serif);
+  letter-spacing: 0.012em;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+#editor .toastui-editor-ww-container {
+  background: var(--reading-surface) !important;
+  scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
+}
+#editor .toastui-editor-ww-container .toastui-editor-contents::selection,
+#editor .toastui-editor-ww-container .toastui-editor-contents *::selection {
+  background: var(--reading-selection);
+  color: var(--fg);
 }
 /* 段落与标题 */
 .toastui-editor-contents p { margin: 0.4em 0; }
+.toastui-editor-ww-container .toastui-editor-contents p { margin: 0 0 1.2em; }
 .toastui-editor-contents h1 { font-size: 1.9em; margin: 1em 0 0.5em; }
 .toastui-editor-contents h2 { font-size: 1.45em; margin: 1.4em 0 0.5em; }
 .toastui-editor-contents h3 { font-size: 1.2em; margin: 1.2em 0 0.45em; }
@@ -481,25 +515,74 @@ body.theme-light .toastui-editor-main .ProseMirror {
   padding-bottom: 0.3em;
   border-bottom: 1px solid var(--titlebar-border);
 }
+.toastui-editor-ww-container .toastui-editor-contents h1,
+.toastui-editor-ww-container .toastui-editor-contents h2,
+.toastui-editor-ww-container .toastui-editor-contents h3,
+.toastui-editor-ww-container .toastui-editor-contents h4,
+.toastui-editor-ww-container .toastui-editor-contents h5,
+.toastui-editor-ww-container .toastui-editor-contents h6 {
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  line-height: 1.35;
+  border-bottom: none;
+}
+.toastui-editor-ww-container .toastui-editor-contents h1 { margin: 0 0 0.85em; padding-bottom: 0.42em; font-size: 2em; }
+.toastui-editor-ww-container .toastui-editor-contents h2 { margin: 1.8em 0 0.85em; padding-bottom: 0.32em; border-bottom: 1px solid var(--reading-rule); font-size: 1.48em; }
+.toastui-editor-ww-container .toastui-editor-contents h3 { margin: 2.1em 0 0.7em; font-size: 1.2em; }
+.toastui-editor-ww-container .toastui-editor-contents h4,
+.toastui-editor-ww-container .toastui-editor-contents h5,
+.toastui-editor-ww-container .toastui-editor-contents h6 { margin: 1.6em 0 0.6em; font-size: 1em; }
+.toastui-editor-ww-container .toastui-editor-contents hr {
+  height: 1px;
+  margin: 2.5em auto;
+  border: 0;
+  background: var(--reading-rule);
+}
+.toastui-editor-ww-container .toastui-editor-contents a {
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  text-underline-offset: 0.16em;
+}
+.toastui-editor-ww-container .toastui-editor-contents a:hover { text-decoration-color: currentColor; }
 /* 列表：条目之间留出呼吸感 */
 .toastui-editor-contents ul,
 .toastui-editor-contents ol { margin: 0.4em 0; padding-left: 1.8em; }
 .toastui-editor-contents li { margin: 0.35em 0; }
 .toastui-editor-contents li > p { margin: 0.15em 0; }
-/* 行内代码：弱化为中性底色，消除大段技术文档里的粉色噪音 */
+.toastui-editor-ww-container .toastui-editor-contents ul,
+.toastui-editor-ww-container .toastui-editor-contents ol { margin: 0.65em 0 1.3em; padding-left: 1.65em; }
+.toastui-editor-ww-container .toastui-editor-contents li { margin: 0.28em 0; padding-left: 0.25em; }
+.toastui-editor-ww-container .toastui-editor-contents li > p { margin: 0.3em 0; }
+.toastui-editor-ww-container .toastui-editor-contents li::marker { color: var(--accent); }
+/* 行内代码：弱化为中性底色，消除大段技术文档里的彩色噪音 */
 .toastui-editor-contents code {
   color: inherit;
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   border: 0;
   border-radius: 4px;
   padding: 0.125em 0.4em;
+  font-family: var(--reading-mono);
   font-size: 0.875em;
+}
+.toastui-editor-ww-container .toastui-editor-contents code {
+  padding: 0.12em 0.36em;
+  border: 1px solid var(--reading-rule);
+  border-radius: 4px;
+  background: var(--reading-code);
+  color: color-mix(in srgb, var(--fg) 88%, var(--accent));
+  font-size: 0.84em;
+  letter-spacing: 0;
 }
 .toastui-editor-contents pre code {
   background: none;
   border-radius: 0;
+  border: 0;
   padding: 0;
   font-size: inherit;
+}
+.toastui-editor-ww-container .toastui-editor-contents pre code {
+  color: inherit;
+  font-size: 0.82em;
 }
 /* 引用块：accent 左缘 + 轻底色，替代整块灰 */
 .toastui-editor-contents blockquote {
@@ -510,13 +593,65 @@ body.theme-light .toastui-editor-main .ProseMirror {
   border-radius: 0 6px 6px 0;
   background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
+.toastui-editor-ww-container .toastui-editor-contents blockquote {
+  margin: 1.5em 0;
+  padding: 0.8em 1.15em;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--reading-quote);
+  color: color-mix(in srgb, var(--fg) 84%, var(--muted));
+}
 .toastui-editor-contents blockquote p { margin: 0.3em 0; }
+.toastui-editor-ww-container .toastui-editor-contents blockquote p { color: inherit; margin-bottom: 0; }
+.toastui-editor-ww-container .toastui-editor-contents blockquote p:last-child { margin-bottom: 0; }
 /* 代码块与分割线 */
 .toastui-editor-contents pre {
   margin: 0.9em 0;
   line-height: 1.65;
 }
+.toastui-editor-ww-container .toastui-editor-contents pre {
+  margin: 1.45em 0;
+  padding: 1.1em 1.25em;
+  overflow: auto;
+  border: 1px solid var(--reading-rule);
+  border-radius: 8px;
+  background: var(--reading-code);
+}
 .toastui-editor-contents hr { margin: 1.8em 0; }
+/* 表格：圆角边框风 */
+.toastui-editor-ww-container .toastui-editor-contents table {
+  display: table;
+  width: 100%;
+  margin: 1.55em 0;
+  overflow: hidden;
+  border: 1px solid var(--reading-rule);
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 7px;
+  font-size: 0.91em;
+}
+.toastui-editor-ww-container .toastui-editor-contents th,
+.toastui-editor-ww-container .toastui-editor-contents td {
+  padding: 0.6em 0.78em;
+  border: 0;
+  border-right: 1px solid var(--reading-rule);
+  border-bottom: 1px solid var(--reading-rule);
+  text-align: left;
+}
+.toastui-editor-ww-container .toastui-editor-contents th {
+  background: var(--reading-table-head);
+  font-weight: 650;
+}
+.toastui-editor-ww-container .toastui-editor-contents :is(th, td) p { margin: 0; }
+.toastui-editor-ww-container .toastui-editor-contents tr > :last-child { border-right: 0; }
+.toastui-editor-ww-container .toastui-editor-contents tbody tr:last-child > * { border-bottom: 0; }
+.toastui-editor-ww-container .toastui-editor-contents img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.7em auto;
+  border-radius: 6px;
+}
 
 /* ============ 代码块复制按钮（悬浮式） ============ */
 .code-block-copy-btn {
@@ -539,20 +674,8 @@ body.theme-light .toastui-editor-main .ProseMirror {
 }
 .code-block-copy-btn:hover { background: var(--btn-bg-hover); color: var(--fg); }
 
-/* ============ 查找匹配高亮框 ============ */
-.match-highlight-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 600;
-  pointer-events: none;
-  display: none;
-}
-.match-highlight-box {
-  position: absolute;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  outline: 2px solid var(--accent);
-  border-radius: 2px;
-}
+/* ============ 查找匹配高亮（CSS Custom Highlight API） ============ */
+::highlight(search-current) { background-color: #ffd36a; color: #251b0d; }
 
 /* ============ 查找与替换 ============ */
 .find-panel {
@@ -652,6 +775,93 @@ body.theme-dark .find-count.no-result { color: #f85149; }
   opacity: 0.55;
 }
 .word-count { font-variant-numeric: tabular-nums; }
+#reading-progress,
+#reading-time { font-variant-numeric: tabular-nums; }
+
+/* ============ 阅读与排版设置 ============ */
+.reading-settings {
+  position: fixed;
+  z-index: 9001;
+  top: calc(var(--tb-h) - 2px);
+  right: 12px;
+  width: min(272px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--titlebar-border);
+  border-radius: 9px;
+  background: var(--titlebar-bg);
+  box-shadow: var(--overlay-shadow);
+  color: var(--fg);
+}
+.reading-settings[hidden] { display: none; }
+.reading-settings h2 {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--titlebar-border);
+  font-size: 13px;
+  font-weight: 650;
+}
+.reading-settings p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.reading-settings small { color: var(--muted); font-size: 10.5px; }
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.settings-row label { color: var(--fg); }
+.settings-row select {
+  max-width: 145px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--titlebar-border);
+  border-radius: 5px;
+  outline: none;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+.settings-row select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
+.settings-row input[type="checkbox"] { accent-color: var(--accent); }
+
+/* ============ 专注模式与打字机模式 ============ */
+/* 专注模式仍保留退出入口；只在确有当前块时淡化其他段落（选择器由阅读模块生成）。
+   不改 ProseMirror 文档节点，避免 DOMObserver 回滚。 */
+body.focus-mode .titlebar {
+  justify-content: flex-end;
+  padding-right: 12px;
+}
+body.focus-mode .title-left,
+body.focus-mode .title-right > :not(#btn-focus) { display: none; }
+body.focus-mode #btn-focus { display: inline-flex; }
+body.focus-mode .file-sidebar {
+  width: 0;
+  flex-basis: 0;
+  border-right-color: transparent;
+}
+body.focus-mode #editor .toastui-editor-defaultUI-toolbar { display: none !important; }
+body.focus-mode #editor .toastui-editor-main { height: 100% !important; }
+body.focus-mode #editor .ProseMirror > * { transition: opacity 0.18s ease; }
+body.typewriter-mode #editor .toastui-editor-ww-container .toastui-editor-contents::after {
+  content: "";
+  display: block;
+  height: 50vh;
+}
+body.typewriter-mode #editor .toastui-editor-md-container .ProseMirror { padding-bottom: 50vh; }
+body.theme-dark #editor pre *,
+body.theme-dark #editor code { text-shadow: none; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
 
 /* ============ 拖拽遮罩 ============ */
 .drop-overlay {
@@ -769,4 +979,24 @@ body.theme-dark .find-count.no-result { color: #f85149; }
   .tb-btn { padding: 0 8px; }
   .icon-btn { padding: 0; }
   .mode-btn { min-width: 46px; }
+}
+
+@media (max-width: 720px) {
+  :root { --sidebar-w: 218px; }
+  .title-left { gap: 4px; }
+  .filename { max-width: 20vw; }
+  .tb-btn { height: 29px; padding: 0 7px; font-size: 12px; }
+  .mode-btn { min-width: 42px; }
+  #editor .toastui-editor-ww-container .toastui-editor-contents {
+    padding: 32px 20px 72px;
+  }
+  #editor .toastui-editor-ww-container .toastui-editor-contents h1 { font-size: 1.72em; }
+  #editor .toastui-editor-ww-container .toastui-editor-contents table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .statusbar { padding: 0 9px; }
+  .status-left,
+  .status-right { gap: 7px; }
 }

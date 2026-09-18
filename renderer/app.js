@@ -31,6 +31,7 @@ document.querySelectorAll('link[href]').forEach((link) => link.setAttribute('hre
 
 // ============ 状态 ============
 let editor = null;
+let readingTools = null;
 window.editor = null;
 let currentFilePath = null;
 let currentBaseUrl = null;
@@ -205,16 +206,16 @@ window.api.onSystemOpenDocument((filePath) => {
 // ============ 主题 ============
 function applyTheme(theme, fromSystem = false) {
   if (fromSystem && !followsSystemTheme) return;
-  const themeChanged = theme !== currentTheme;
   currentTheme = theme;
   document.body.classList.toggle('theme-dark', theme === 'dark');
   document.body.classList.toggle('theme-light', theme === 'light');
-  themeIconEl.textContent = theme === 'dark' ? '☀️' : '🌙';
+  themeIconEl.textContent = theme === 'dark' ? '☼' : '◐';
   themeIconEl.parentElement.title =
     `切换主题 (当前: ${theme === 'dark' ? '暗色' : '亮色'}${fromSystem ? '，跟随系统' : ''})`;
-  // Toast UI 主题：重建编辑器（官方推荐方式）。主题值未变化时跳过，
-  // 避免系统主题通知触发不必要的重建（闪屏 + 丢失选区）。
-  if (themeChanged || !editor) rebuildEditor();
+  // 主题样式由根 class 控制：toastui-editor-dark.css 常驻加载，
+  // 切换 defaultUI 上的 dark class 即可换肤；保留编辑器实例、选区与撤销历史。
+  document.querySelector('#editor .toastui-editor-defaultUI')
+    ?.classList.toggle('toastui-editor-dark', theme === 'dark');
 }
 
 function toggleTheme() {
@@ -296,13 +297,16 @@ function createEditor(initialValue) {
         updateEditMode(mode);
         updateCaretStatus();
         scheduleMermaidRender();
-        hideMatchHighlight();
+        currentFindMatch = -1;
+        CSS.highlights.delete('search-current');
+        if (!findPanelEl.hidden) updateFindCount();
+        readingTools?.refresh();
         // Toast UI 在 changeMode 通知后仍会完成一次 code-block NodeView 更新。
         setTimeout(scheduleMermaidRender, 80);
       }
     }
   });
-  instance.on('afterPreviewRender', scheduleMermaidRender);
+  instance.on('afterPreviewRender', () => { scheduleMermaidRender(); readingTools?.refresh(); });
   // 光标事件统一走 instance.on：构造函数 events 选项不转发 focus/blur/caretChange。
   instance.on('caretChange', updateCaretStatus);
   instance.on('focus', updateCaretStatus);
@@ -317,30 +321,6 @@ function watchEditorFocusLoss() {
   document.addEventListener('focusout', () => {
     setTimeout(updateCaretStatus, 0);
   });
-}
-
-// 重建编辑器（用于切换主题）
-function rebuildEditor() {
-  if (!editor) return;
-  const md = editor.getMarkdown();
-  const scroll = captureEditorScroll();
-  const wasDirty = isDirty;
-  let selection = null;
-  try {
-    selection = editor.getSelection();
-  } catch (_) { /* 选区不可读时跳过恢复 */ }
-  editor.destroy();
-  editor = createEditor(md);
-  window.editor = editor;
-  setDirty(wasDirty);
-  hideMatchHighlight();
-  if (selection) {
-    try {
-      // getSelection/setSelection 在同一模式下格式一致（源码 [行,列]，所见即所得偏移量）。
-      editor.setSelection(selection[0], selection[1]);
-    } catch (_) { /* 位置失效则放弃恢复 */ }
-  }
-  restoreEditorScroll(scroll);
 }
 
 // ============ 状态更新 ============
@@ -375,6 +355,7 @@ function comparablePath(filePath) {
 function setSidebarCollapsed(collapsed, persist = true) {
   sidebarCollapsed = Boolean(collapsed);
   workspaceEl.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+  document.getElementById('file-sidebar').inert = sidebarCollapsed || document.body.classList.contains('focus-mode');
   sidebarButtonEl.setAttribute('aria-expanded', String(!sidebarCollapsed));
   sidebarButtonEl.title = `${sidebarCollapsed ? '显示' : '隐藏'}文件侧边栏 (Ctrl+Shift+E)`;
   if (persist) {
@@ -411,7 +392,7 @@ function createTreeEntry(entry, activePath) {
     summary.title = entry.path;
     const icon = document.createElement('span');
     icon.className = 'tree-icon';
-    icon.textContent = '📁';
+    icon.textContent = '▱';
     const name = document.createElement('span');
     name.className = 'tree-name';
     name.textContent = entry.name;
@@ -434,7 +415,7 @@ function createTreeEntry(entry, activePath) {
 
   const icon = document.createElement('span');
   icon.className = 'tree-icon';
-  icon.textContent = '📄';
+  icon.textContent = '≡';
   const name = document.createElement('span');
   name.className = 'tree-name';
   name.textContent = entry.name;
@@ -641,9 +622,9 @@ function setStatus(text) {
   statusInfoEl.textContent = text;
 }
 
-function updateWordCount(md) {
-  const text = (md || '').replace(/[#*`>\-_\[\]()!|=\s]/g, '');
-  wordCountEl.textContent = `${text.length} 字`;
+function updateWordCount() {
+  // 统计基于渲染正文（CJK 感知），由阅读模块负责计算与展示。
+  readingTools?.refresh();
 }
 
 function updateCursorPos(pos) {
@@ -717,6 +698,18 @@ async function confirmBeforeReplace() {
   return false;
 }
 
+// 文档替换（新建/打开另一份文件）时重建编辑器：
+// setMarkdown 的事务会留在撤销历史里，旧文档内容可能被 Ctrl+Z 带回新文档；
+// 重建是清空历史最可靠的方式（主题切换不再重建，历史只在换文档时重置）。
+function replaceEditorContent(content) {
+  editor.destroy();
+  editor = createEditor(content);
+  window.editor = editor;
+  CSS.highlights.delete('search-current');
+  currentFindMatch = -1;
+  lastFindSignature = '';
+}
+
 async function newDocument() {
   if (!(await confirmBeforeReplace())) return false;
   currentFilePath = null;
@@ -724,11 +717,11 @@ async function newDocument() {
   lastSavedContent = '';
   setDocumentBase(null);
   clearFileTree();
-  editor.setMarkdown('', false);
+  replaceEditorContent('');
   findPanelEl.hidden = true;
   setDirty(false);
   updateTitle();
-  updateWordCount('');
+  updateWordCount();
   setStatus('已新建空白文档');
   toast('已新建文档');
   window.api.stopWatchingDocument();
@@ -767,7 +760,7 @@ async function openSystemDocument(filePath) {
 function loadContent(filePath, content, baseUrl) {
   currentFilePath = filePath || null;
   setDocumentBase(baseUrl);
-  editor.setMarkdown(content, false);
+  replaceEditorContent(content);
   // Toast UI 可能规范化末尾换行；以编辑器实际内容作为已保存基线，避免刚打开就误报修改。
   lastSavedContent = editor.getMarkdown();
   findPanelEl.hidden = true;
@@ -928,96 +921,76 @@ function getFindExpression() {
   return new RegExp(escapeRegExp(query), caseSensitiveEl.checked ? 'g' : 'gi');
 }
 
-function getMarkdownMatches() {
+// Toast UI 3.x 两种模式的当前视图都提供 ProseMirror view（文档位置↔DOM 位置）。
+// 将适配集中在这里；查找只读文档，高亮用 CSS Custom Highlight API，
+// 不改写编辑器 DOM、不占用选区、不改变焦点。
+function getSearchView() {
+  return editor.getCurrentModeEditor().view;
+}
+
+// 基于当前模式的可见文本块收集匹配，返回 ProseMirror 文档区间 [from, to)。
+// 所见即所得只匹配看得见的文字（不含链接地址等隐藏内容）；块边界天然隔断
+// 跨块误匹配；图片、硬换行等叶子节点按占位符处理，不与相邻文字拼成命中。
+function getFindMatches() {
   const expression = getFindExpression();
   if (!expression) return [];
-  const content = editor.getMarkdown();
-  return Array.from(content.matchAll(expression), (match) => ({
-    index: match.index,
-    length: match[0].length
-  }));
-}
-
-function textIndexToLineCol(text, index) {
-  let line = 1;
-  let lineStart = 0;
-  for (let i = 0; i < index && i < text.length; i += 1) {
-    if (text[i] === '\n') {
-      line += 1;
-      lineStart = i + 1;
+  const matches = [];
+  getSearchView().state.doc.descendants((block, blockPosition) => {
+    if (!block.isTextblock) return true;
+    let text = '';
+    const positions = [];
+    block.descendants((node, offset) => {
+      if (node.isText) {
+        for (let index = 0; index < node.text.length; index += 1) {
+          text += node.text[index];
+          positions.push(blockPosition + 1 + offset + index);
+        }
+      } else if (node.isLeaf) {
+        text += '\ufffc'; // 图片、换行等节点不是相邻可搜索文字。
+        positions.push(blockPosition + 1 + offset);
+      }
+    });
+    for (const match of text.matchAll(expression)) {
+      matches.push({ from: positions[match.index], to: positions[match.index + match[0].length - 1] + 1 });
     }
-  }
-  return { line, col: index - lineStart + 1 };
-}
-
-// 当前模式“可见文本”及其匹配：
-// - 源码模式：文本即 Markdown 源，匹配位置可直接用于 setSelection。
-// - 所见即所得模式：遍历 ProseMirror 文档构建 文本↔位置 映射，块边界插 \n
-//   防止跨块误匹配。查找/计数/高亮始终基于用户看得见的文本，与 Markdown
-//   源中的替换通过序号一一对应。
-function getVisibleMatches() {
-  const expression = getFindExpression();
-  if (!expression) return { text: '', map: [], matches: [] };
-  if (currentEditMode === 'markdown') {
-    const text = editor.getMarkdown();
-    return { text, map: null, matches: Array.from(text.matchAll(expression), (m) => ({ index: m.index, length: m[0].length })) };
-  }
-  let text = '';
-  const map = [];
-  let view = null;
-  try {
-    view = editor.getCurrentModeEditor().view;
-  } catch (_) {
-    return { text: '', map: [], matches: [] };
-  }
-  view.state.doc.descendants((node, pos) => {
-    if (node.isText && node.text) {
-      map.push({ start: text.length, end: text.length + node.text.length, pos });
-      text += node.text;
-      return true;
-    }
-    if (node.isLeaf) {
-      const size = Math.max(node.nodeSize, 1);
-      map.push({ start: text.length, end: text.length + size, pos, leaf: true });
-      text += '\ufffc';
-      return false;
-    }
-    if (node.isBlock && text.length > 0 && !text.endsWith('\n')) {
-      text += '\n';
-    }
-    return true;
+    return false;
   });
-  const matches = Array.from(text.matchAll(expression), (m) => ({ index: m.index, length: m[0].length }));
-  return { text, map, matches };
+  return matches;
 }
 
-function modePositionForIndex(visible, index) {
-  if (!visible.map) return index;
-  for (const entry of visible.map) {
-    if (index >= entry.start && index <= entry.end) {
-      return entry.pos + (index - entry.start);
+// 高亮当前匹配；reveal 时滚动到可视区（焦点可以在查找面板——PM 不会自己滚）。
+function highlightFindMatch(match, reveal = false) {
+  CSS.highlights.delete('search-current');
+  if (!match || findPanelEl.hidden) return;
+  const view = getSearchView();
+  const start = view.domAtPos(match.from);
+  const end = view.domAtPos(match.to);
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  CSS.highlights.set('search-current', new Highlight(range));
+  if (!reveal) return;
+
+  const root = view.dom;
+  // 代码块等内部横向滚动区也需露出匹配文字。
+  let parent = range.startContainer.nodeType === Node.ELEMENT_NODE
+    ? range.startContainer : range.startContainer.parentElement;
+  while (parent && root.contains(parent)) {
+    if (parent.scrollWidth > parent.clientWidth && /auto|scroll/.test(getComputedStyle(parent).overflowX)) {
+      const rect = range.getBoundingClientRect();
+      const bounds = parent.getBoundingClientRect();
+      parent.scrollLeft += rect.left + rect.width / 2 - bounds.left - parent.clientWidth / 2;
     }
+    if (parent === root) break;
+    parent = parent.parentElement;
   }
-  const last = visible.map[visible.map.length - 1];
-  return last ? last.pos + (last.end - last.start) : 0;
-}
-
-// 高亮第 n 个匹配：源码模式用 [行, 列]，所见即所得模式用文档偏移量。
-// 焦点在查找输入框（编辑器未聚焦）时 ProseMirror 既不滚动也不同步选区高亮，
-// 因此：① 手动滚入视区；② 用独立高亮框标记匹配位置（不占用 DOM 选区，
-// 不改变焦点，Enter 可连续查找）。
-function highlightMatch(visible, match) {
-  const startIndex = match.index;
-  const endIndex = match.index + Math.max(match.length, 1);
-  if (currentEditMode === 'markdown') {
-    const from = textIndexToLineCol(visible.text, startIndex);
-    const to = textIndexToLineCol(visible.text, endIndex);
-    editor.setSelection([from.line, from.col], [to.line, to.col]);
-  } else {
-    editor.setSelection(modePositionForIndex(visible, startIndex), modePositionForIndex(visible, endIndex));
-  }
-  scrollEditorSelectionIntoView();
-  showMatchHighlight();
+  const rect = range.getBoundingClientRect();
+  const bounds = root.getBoundingClientRect();
+  const panel = findPanelEl.getBoundingClientRect();
+  const visibleTop = panel.left < bounds.right && panel.right > bounds.left
+    ? Math.max(bounds.top, panel.bottom + 16) : bounds.top;
+  const visibleBottom = Math.min(bounds.bottom, window.innerHeight);
+  root.scrollTop += rect.top + rect.height / 2 - (visibleTop + visibleBottom) / 2;
 }
 
 // 把当前 PM 选区滚动到编辑器可视区约 1/3 高度处（已可见则不动）。
@@ -1043,74 +1016,18 @@ function scrollEditorSelectionIntoView() {
   } catch (_) { /* 滚动失败不影响查找结果 */ }
 }
 
-// ============ 查找匹配高亮框 ============
-// 浏览器只绘制焦点元素内的选区；焦点在查找面板时编辑器选区不可见，
-// 因此用独立的覆盖层标记当前匹配（不改变焦点，Enter 可连续查找）。
-let matchHighlightLayer = null;
-let matchHighlightActive = false;
-
-function hideMatchHighlight() {
-  matchHighlightActive = false;
-  if (matchHighlightLayer) matchHighlightLayer.replaceChildren();
-}
-
-// 依据当前 PM 选区绘制高亮框（跨行匹配按行拆成多个矩形）。
-function showMatchHighlight() {
-  let view = null;
-  try {
-    view = editor.getCurrentModeEditor().view;
-  } catch (_) { return; }
-  if (!view || !view.dom) { hideMatchHighlight(); return; }
-  try {
-    const { from, to } = view.state.selection;
-    if (to <= from) { hideMatchHighlight(); return; }
-    const startPos = view.domAtPos(from);
-    const endPos = view.domAtPos(to);
-    const range = document.createRange();
-    range.setStart(startPos.node, startPos.offset);
-    range.setEnd(endPos.node, endPos.offset);
-    const rects = Array.from(range.getClientRects()).filter(
-      (rect) => rect.width > 0 && rect.height > 0
-    ).slice(0, 40);
-    if (!rects.length) { hideMatchHighlight(); return; }
-
-    if (!matchHighlightLayer) {
-      matchHighlightLayer = document.createElement('div');
-      matchHighlightLayer.className = 'match-highlight-layer';
-      document.body.appendChild(matchHighlightLayer);
-    }
-    matchHighlightLayer.replaceChildren();
-    for (const rect of rects) {
-      const box = document.createElement('div');
-      box.className = 'match-highlight-box';
-      box.style.left = `${rect.left - 2}px`;
-      box.style.top = `${rect.top}px`;
-      box.style.width = `${rect.width + 4}px`;
-      box.style.height = `${rect.height}px`;
-      matchHighlightLayer.appendChild(box);
-    }
-    matchHighlightLayer.style.display = 'block';
-    matchHighlightActive = true;
-  } catch (_) {
-    hideMatchHighlight();
-  }
-}
-
-// 覆盖层用 fixed 定位，滚动/缩放后需按当前选区重算位置。
-function repositionMatchHighlight() {
-  if (matchHighlightActive) showMatchHighlight();
-}
-
 function updateFindCount() {
   const signature = `${currentEditMode}:${caseSensitiveEl.checked ? '1' : '0'}:${findInputEl.value}`;
   if (signature !== lastFindSignature) {
     lastFindSignature = signature;
     currentFindMatch = -1;
   }
-  const count = getVisibleMatches().matches.length;
+  const matches = getFindMatches();
+  const count = matches.length;
   if (currentFindMatch >= count) currentFindMatch = count - 1;
   findCountEl.textContent = currentFindMatch >= 0 ? `${currentFindMatch + 1}/${count}` : `${count} 处`;
   findCountEl.classList.toggle('no-result', Boolean(findInputEl.value) && count === 0);
+  highlightFindMatch(matches[currentFindMatch]);
   return count;
 }
 
@@ -1128,7 +1045,7 @@ function showFindPanel(replaceMode = false) {
 
 function closeFindPanel() {
   findPanelEl.hidden = true;
-  hideMatchHighlight();
+  CSS.highlights.delete('search-current');
   editor.focus();
 }
 
@@ -1138,8 +1055,8 @@ function findInEditor(backwards = false) {
     showFindPanel();
     return false;
   }
-  const visible = getVisibleMatches();
-  const count = visible.matches.length;
+  const matches = getFindMatches();
+  const count = matches.length;
   if (count === 0) {
     findCountEl.textContent = '0 处';
     findCountEl.classList.add('no-result');
@@ -1151,79 +1068,39 @@ function findInEditor(backwards = false) {
     : (currentFindMatch + 1) % count;
   findCountEl.textContent = `${currentFindMatch + 1}/${count}`;
   findCountEl.classList.remove('no-result');
-  highlightMatch(visible, visible.matches[currentFindMatch]);
+  highlightFindMatch(matches[currentFindMatch], true);
   return true;
 }
 
-// 编辑器滚动容器：所见即所得为可见的 ProseMirror 内容区，源码模式还有预览列。
-function getVisibleScrollContainers() {
-  return Array.from(document.querySelectorAll(
-    '.toastui-editor .ProseMirror, .toastui-editor-md-preview'
-  )).filter((el) => el.offsetParent !== null);
-}
-
-function captureEditorScroll() {
-  return getVisibleScrollContainers().map((el) => ({
-    preview: el.classList.contains('toastui-editor-md-preview'),
-    top: el.scrollTop
-  }));
-}
-
-function restoreEditorScroll(captured) {
-  if (!captured || !captured.length) return;
-  requestAnimationFrame(() => {
-    for (const snapshot of captured) {
-      const el = getVisibleScrollContainers()
-        .find((candidate) => candidate.classList.contains('toastui-editor-md-preview') === snapshot.preview);
-      if (el) el.scrollTop = snapshot.top;
-    }
-  });
-}
-
+// 替换基于当前视图的 ProseMirror 区间直接派发事务：
+// 所见即所得只替换可见文字（不误伤隐藏的链接地址），整次操作单步可撤销，
+// 滚动位置由 PM 自然保持，无需手动快照恢复。
 function replaceCurrentMatch() {
   if (!findInputEl.value) return;
-  const visible = getVisibleMatches();
-  if (visible.matches.length === 0) { toast('未找到匹配内容'); return; }
-  if (currentFindMatch < 0 || currentFindMatch >= visible.matches.length) currentFindMatch = 0;
-
-  // 替换操作针对 Markdown 源文件内容；通过“第 n 个匹配”的序号对齐当前高亮项。
-  const markdownMatches = getMarkdownMatches();
-  let mdMatch = null;
-  if (currentEditMode === 'markdown') {
-    mdMatch = visible.matches[currentFindMatch];
-  } else if (markdownMatches.length === visible.matches.length) {
-    mdMatch = markdownMatches[currentFindMatch];
-  }
-  if (!mdMatch) {
-    toast('当前视图下无法对齐替换位置，请切换到源码模式');
-    return;
-  }
-
-  const content = editor.getMarkdown();
-  const nextContent = content.slice(0, mdMatch.index) +
-    replaceInputEl.value +
-    content.slice(mdMatch.index + mdMatch.length);
-  const scroll = captureEditorScroll();
-  editor.setMarkdown(nextContent, false);
-  restoreEditorScroll(scroll);
-  currentFindMatch -= 1;
+  const matches = getFindMatches();
+  if (matches.length === 0) { toast('未找到匹配内容'); return; }
+  if (currentFindMatch < 0 || currentFindMatch >= matches.length) currentFindMatch = 0;
+  const replacedIndex = currentFindMatch;
+  const match = matches[currentFindMatch];
+  const view = getSearchView();
+  view.dispatch(view.state.tr.insertText(replaceInputEl.value, match.from, match.to));
+  currentFindMatch = replacedIndex - 1;
   updateFindCount();
-  findInEditor(false);
+  if (getFindMatches().length) findInEditor(false);
 }
 
 function replaceAllMatches() {
-  const expression = getFindExpression();
-  if (!expression) return;
-  const content = editor.getMarkdown();
-  const matches = content.match(expression) || [];
+  if (!getFindExpression()) return;
+  const matches = getFindMatches();
   if (matches.length === 0) {
     toast('未找到匹配内容');
     return;
   }
-  const scroll = captureEditorScroll();
-  const nextContent = content.replace(expression, () => replaceInputEl.value);
-  editor.setMarkdown(nextContent, false);
-  restoreEditorScroll(scroll);
+  const view = getSearchView();
+  const transaction = view.state.tr;
+  // 从末尾替换，前面命中的位置保持有效；整次操作可一次撤销。
+  [...matches].reverse().forEach((match) => transaction.insertText(replaceInputEl.value, match.from, match.to));
+  view.dispatch(transaction);
   currentFindMatch = -1;
   updateFindCount();
   toast(`已替换 ${matches.length} 处`);
@@ -1289,11 +1166,14 @@ document.getElementById('btn-find-next').addEventListener('click', () => findInE
 document.getElementById('btn-find-close').addEventListener('click', closeFindPanel);
 document.getElementById('btn-replace').addEventListener('click', replaceCurrentMatch);
 document.getElementById('btn-replace-all').addEventListener('click', replaceAllMatches);
-findInputEl.addEventListener('input', () => {
-  hideMatchHighlight();
-  updateFindCount();
-});
-caseSensitiveEl.addEventListener('change', updateFindCount);
+// 输入即跳转：每次修改查询都重新计数并滚动到首个命中，
+// 不必按 Enter 才能看到定位（编辑器未聚焦时 PM 不会自己滚动）。
+function findFromInput() {
+  currentFindMatch = -1;
+  if (updateFindCount()) findInEditor(false);
+}
+findInputEl.addEventListener('input', findFromInput);
+caseSensitiveEl.addEventListener('change', findFromInput);
 findInputEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
@@ -1328,6 +1208,7 @@ function handleEditorCommand(name, payload = {}) {
       case 'toggleMode': toggleEditMode(); break;
       case 'toggleSidebar': setSidebarCollapsed(!sidebarCollapsed); break;
       case 'showOutline': setSidebarTab('outline'); break;
+      case 'toggleFocus': readingTools?.toggleFocus(); break;
       case 'followSystemTheme': void followSystemTheme(); break;
       case 'print': void printDocument(); break;
       case 'export': void exportDocument(payload.format === 'html' ? 'html' : 'pdf'); break;
@@ -1576,13 +1457,40 @@ async function init() {
     family: (storedPrefs && storedPrefs.editorFontFamily) || '',
   };
   applyEditorFontPrefs();
+  const readingLineWidth = (storedPrefs && Number(storedPrefs.readingLineWidth)) || 780;
+  document.documentElement.style.setProperty('--reading-width', `${readingLineWidth}px`);
+  const typewriterMode = Boolean(storedPrefs && storedPrefs.typewriterMode);
+  document.body.classList.toggle('typewriter-mode', typewriterMode);
   document.body.classList.toggle('theme-dark', currentTheme === 'dark');
   document.body.classList.toggle('theme-light', currentTheme === 'light');
-  themeIconEl.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+  themeIconEl.textContent = currentTheme === 'dark' ? '☼' : '◐';
   setSidebarCollapsed(sidebarCollapsed, false);
 
   editor = createEditor('');
   window.editor = editor;
+  readingTools = window.ReadingExperience.create({
+    onSetFontSize: (size) => handleEditorCommand('setFontSize', { size }),
+    onSetLineWidth: (width) => {
+      document.documentElement.style.setProperty('--reading-width', `${width}px`);
+      window.api.setPreference({ readingLineWidth: width });
+      setStatus(`正文宽度：${width} px`);
+    },
+    onSetTypewriter: (enabled) => {
+      document.body.classList.toggle('typewriter-mode', enabled);
+      window.api.setPreference({ typewriterMode: enabled });
+      setStatus(enabled ? '打字机模式已开启' : '打字机模式已关闭');
+    },
+    onSetTheme: (preference) => {
+      if (preference === 'system') void followSystemTheme();
+      else {
+        followsSystemTheme = false;
+        window.api.setPreference({ theme: preference });
+        applyTheme(preference);
+      }
+    },
+    getFontSize: () => editorFontPrefs.size,
+    getTheme: () => (followsSystemTheme ? 'system' : currentTheme),
+  });
   mermaidDOMObserver.observe(document.getElementById('editor'), {
     childList: true,
     subtree: true,
@@ -1591,12 +1499,9 @@ async function init() {
   // Mermaid 预览位于 ProseMirror 之外，滚动本身不会产生 DOM 变更；在捕获阶段
   // 监听内部滚动，及时重新对齐预览层，避免图表与它覆盖的源码块分离。
   document.getElementById('editor').addEventListener('scroll', scheduleMermaidRender, true);
-  // 查找高亮框为 fixed 定位，滚动/缩放后重算位置。
-  document.getElementById('editor').addEventListener('scroll', repositionMatchHighlight, true);
-  window.addEventListener('resize', repositionMatchHighlight);
   window.addEventListener('resize', scheduleMermaidRender);
   updateEditMode(currentEditMode);
-  updateWordCount(editor.getMarkdown());
+  updateWordCount();
   updateTitle();
   setStatus('已新建空白文档');
   setupContextMenu();
