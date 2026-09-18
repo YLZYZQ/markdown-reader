@@ -128,7 +128,8 @@ window.ReadingExperience = (() => {
       const button = byId('btn-focus');
       if (button) {
         button.setAttribute('aria-pressed', String(focusMode));
-        button.textContent = focusMode ? '退出专注' : '专注';
+        button.classList.toggle('active', focusMode);
+        button.title = focusMode ? '退出专注模式 (Esc)' : '专注模式 (F8)';
       }
       updateFocusedBlock(false);
       requestAnimationFrame(updatePosition);

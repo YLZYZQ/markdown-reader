@@ -240,10 +240,12 @@ async function followSystemTheme() {
 function updateEditMode(mode) {
   currentEditMode = mode === 'markdown' ? 'markdown' : 'wysiwyg';
   const isMarkdown = currentEditMode === 'markdown';
-  modeButtonEl.textContent = isMarkdown ? '所见即所得' : '源码';
+  // 按钮图标指示“将切换到的模式”：源码 </> ，所见即所得 ✎。
+  modeButtonEl.textContent = isMarkdown ? '✎' : '</>';
   modeButtonEl.title = isMarkdown
     ? '切换到所见即所得模式 (Ctrl+/)'
     : '切换到源码模式 (Ctrl+/)';
+  modeButtonEl.setAttribute('aria-label', isMarkdown ? '切换到所见即所得模式' : '切换到源码模式');
   setStatus(isMarkdown ? 'Markdown 源码模式' : '所见即所得模式');
 }
 
