@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   getSystemTheme: () => ipcRenderer.invoke('theme:getSystem'),
   getPreferences: () => ipcRenderer.invoke('prefs:getAll'),
   setPreference: (patch) => ipcRenderer.send('prefs:set', patch),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
   // 崩溃恢复备份
   writeBackup: (session) => ipcRenderer.send('backup:write', session),

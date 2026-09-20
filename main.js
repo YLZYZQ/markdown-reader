@@ -201,15 +201,17 @@ async function saveImageBuffer(mdFilePath, fileName, arrayBuffer) {
   };
 }
 
-function openExternalUrl(url) {
+async function openExternalUrl(url) {
   try {
     const parsed = new URL(url);
     if (parsed.protocol === 'https:' || parsed.protocol === 'http:' || parsed.protocol === 'mailto:') {
-      void shell.openExternal(parsed.href);
+      await shell.openExternal(parsed.href);
+      return true;
     }
   } catch (_) {
     // 忽略无效或不受支持的链接。
   }
+  return false;
 }
 
 async function promptForClose() {
@@ -301,7 +303,7 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => mainWindow && mainWindow.show());
-  mainWindow.on('close', () => {
+  mainWindow.on('close', (event) => {
     if (!mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
       // getNormalBounds 在最大化时也返回还原态尺寸，还原后体验一致。
       const bounds = mainWindow.getNormalBounds();
@@ -323,13 +325,18 @@ function createWindow() {
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
     event.preventDefault();
-    openExternalUrl(url);
+    void openExternalUrl(url);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    openExternalUrl(url);
+    void openExternalUrl(url);
     return { action: 'deny' };
   });
 }
+
+ipcMain.handle('shell:openExternal', async (event, url) => {
+  if (!isCurrentRenderer(event) || typeof url !== 'string') return false;
+  return openExternalUrl(url);
+});
 
 ipcMain.handle('file:open', async (event) => {
   if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');

@@ -1,6 +1,6 @@
 {
   "name": "md-reader",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "description": "一个像 Typora 的 Markdown 阅读器/编辑器（Electron + Toast UI Editor，免安装）",
   "main": "main.js",
   "author": "",
@@ -16,7 +16,9 @@
     "dist:portable": "node scripts/build-windows-portable.js",
     "dist:dir": "electron-builder --win --dir",
     "test:reading": "electron test/reading-electron.js",
-    "test:search": "electron test/search-electron.js"
+    "test:search": "electron test/search-electron.js",
+    "test:link": "electron test/link-electron.js",
+    "test:close": "electron test/close-electron.js"
   },
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",

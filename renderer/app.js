@@ -325,6 +325,67 @@ function watchEditorFocusLoss() {
   });
 }
 
+// WYSIWYG 的链接位于 contenteditable 的 ProseMirror 文档中，浏览器不会按普通
+// 链接导航；预览列也统一走这里，避免同一次点击触发两条导航路径。
+function headingSlug(text) {
+  return String(text || '')
+    .trim()
+    .toLocaleLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s+/g, '-');
+}
+
+function scrollToEditorAnchor(hash) {
+  const active = editor?.isMarkdownMode()
+    ? document.querySelector('.toastui-editor-md-preview .toastui-editor-contents')
+    : document.querySelector('.toastui-editor-ww-container .ProseMirror');
+  if (!active) return;
+
+  let fragment = '';
+  try {
+    fragment = decodeURIComponent(hash.slice(1));
+  } catch (_) {
+    fragment = hash.slice(1);
+  }
+  const headings = [...active.querySelectorAll('h1,h2,h3,h4,h5,h6')];
+  const target = active.querySelector(`[id="${CSS.escape(fragment)}"]`) ||
+    headings.find((heading) => heading.id === fragment ||
+      headingSlug(heading.textContent) === headingSlug(fragment) ||
+      heading.textContent.trim() === fragment);
+  target?.scrollIntoView({ block: 'start' });
+}
+
+function watchEditorLinks() {
+  const openLink = (event) => {
+    const link = event.target?.closest?.('a[href]');
+    if (!link) return;
+
+    let url;
+    try {
+      url = new URL(link.href);
+    } catch (_) {
+      return;
+    }
+    if ((link.getAttribute('href') || '').startsWith('#')) {
+      event.preventDefault();
+      scrollToEditorAnchor(url.hash);
+      return;
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:' && url.protocol !== 'mailto:') return;
+
+    event.preventDefault();
+    window.api.openExternal(url.href).then((opened) => {
+      if (!opened) toast('无法打开链接');
+    });
+  };
+
+  const editorElement = document.getElementById('editor');
+  editorElement.addEventListener('click', openLink, true);
+  editorElement.addEventListener('auxclick', openLink, true);
+}
+
 // ============ 状态更新 ============
 function setDirty(dirty) {
   const nextDirty = Boolean(dirty);
@@ -1508,6 +1569,7 @@ async function init() {
   setStatus('已新建空白文档');
   setupContextMenu();
   watchEditorFocusLoss();
+  watchEditorLinks();
   setupCodeCopyButtons();
 
   try {
