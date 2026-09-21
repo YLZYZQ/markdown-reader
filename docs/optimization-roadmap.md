@@ -1,5 +1,7 @@
 # 对标分析与优化路线
 
+> 历史调研记录：文中的商业产品名称仅表示当时的体验对照，不代表代码参考、商标授权或官方关联。正式开源组件来源和维护规则见 [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 与 [open-source.md](open-source.md)。
+
 分析日期：2026-08-30（基于 v1.2.0 代码 + 无头能力探针 `test/probe-features.js` 实测）。
 对标对象：Typora（收费标杆）、MarkText（开源同类，2022 年起停止维护）、Obsidian（知识库）、Zettlr（学术写作）、VS Code（通用编辑器）。
 

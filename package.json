@@ -8,7 +8,9 @@
   "scripts": {
     "start": "electron .",
     "build:renderer": "esbuild build-bundle.js --bundle --minify --platform=browser --outfile=renderer/tui-editor/editor-bundle.js",
-    "test": "node --test test/*.test.js",
+    "test": "node scripts/check-open-source-notices.js && node --test test/*.test.js",
+    "notices:check": "node scripts/check-open-source-notices.js",
+    "notices:update": "node scripts/update-third-party-license-inventory.js",
     "test:smoke": "electron test/smoke-electron.js",
     "test:print": "electron test/print-pipeline.electron.js",
     "dist": "electron-builder --win",
@@ -44,6 +46,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "THIRD_PARTY_LICENSES.md",
       "lib/**/*",
       "renderer/**/*"
     ],

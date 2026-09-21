@@ -1,6 +1,6 @@
 # Markdown阅读器
 
-一个基于 Electron 和 Toast UI Editor 的本地 Markdown 阅读器与编辑器，提供接近 Typora 的所见即所得体验。
+一个基于 Electron 和 Toast UI Editor 的本地 Markdown 阅读器与编辑器，提供接近成熟商业产品的所见即所得体验。
 
 ## 功能
 
@@ -37,13 +37,14 @@ npm start
 
 ```powershell
 npm test
+npm run notices:check
 npm run test:smoke
 npm run test:print
 npm run test:reading
 npm run test:search
 ```
 
-`test:reading` 验证大纲、阅读进度、字数统计、专注模式、排版偏好与主题切换保留状态，并将浅色、深色、专注模式截图保存到 `release/reading-preview/`；`test:search` 验证长文查找定位、回绕、大小写与替换的事务性。
+`npm test` 与 `notices:check` 会校验直接依赖、锁定版本与开源清单一致。`test:reading` 验证大纲、阅读进度、字数统计、专注模式、排版偏好与主题切换保留状态，并将浅色、深色、专注模式截图保存到 `release/reading-preview/`；`test:search` 验证长文查找定位、回绕、大小写与替换的事务性。
 
 ## 构建
 
@@ -69,4 +70,4 @@ npm run dist:portable
 
 ## 许可证
 
-[MIT](LICENSE)
+[MIT](LICENSE)。直接集成或用于构建的开源组件、锁定版本与上游项目见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，运行时传递依赖清单见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)，维护规则见 [docs/open-source.md](docs/open-source.md)。

@@ -1360,7 +1360,7 @@ window.api.onFileExternalChanged(() => {
   setStatus('文件已被外部程序修改；如需最新内容请从侧边栏重新打开');
 });
 
-// ============ 右键上下文菜单（类 Typora）============
+// ============ 右键上下文菜单（成熟商业阅读器风格）============
 const MENU_ITEMS = [
   { label: '撤销', hotkey: 'Ctrl+Z', action: () => editor.exec('undo') },
   { label: '重做', hotkey: 'Ctrl+Shift+Z', action: () => editor.exec('redo') },

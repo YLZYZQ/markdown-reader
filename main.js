@@ -958,7 +958,7 @@ function buildMenu() {
           type: 'info',
           title: '关于',
           message: `Markdown阅读器 ${app.getVersion()}`,
-          detail: '一个像 Typora 的 Markdown 阅读器/编辑器\n基于 Electron + Toast UI Editor\n即时渲染 · 亮/暗主题 · 免安装'
+          detail: '一个体验接近成熟商业产品的 Markdown 阅读器/编辑器\n基于 Electron、Toast UI Editor、Mermaid 与 PrismJS\n即时渲染 · 亮/暗主题 · 免安装'
           })
         }
       ]
