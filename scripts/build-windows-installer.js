@@ -5,9 +5,10 @@ const path = require('node:path');
 
 const projectDir = path.resolve(__dirname, '..');
 const packageJson = require(path.join(projectDir, 'package.json'));
+const productName = packageJson.build.productName;
 const temporaryOutput = fs.mkdtempSync(path.join(os.tmpdir(), 'md-reader-build-'));
 const releaseDir = path.join(projectDir, 'release');
-const artifactBaseName = `MarkdownReader-Setup-${packageJson.version}.exe`;
+const artifactBaseName = `${productName}-Setup-${packageJson.version}.exe`;
 
 const electronBuilderCli = path.join(
   projectDir,

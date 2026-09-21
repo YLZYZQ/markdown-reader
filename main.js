@@ -8,11 +8,12 @@ const fsp = fs.promises;
 const {
   getDocumentBaseUrl,
   getMarkdownImageUrl,
+  normalizeFileSystemPath,
   normalizeDocumentPath,
   pathKey,
   sanitizeImageFileName
 } = require('./lib/file-utils');
-const { listDocumentTree } = require('./lib/file-tree');
+const { listDirectoryTree, listDocumentTree } = require('./lib/file-tree');
 const { parseFileArg } = require('./lib/cli-args');
 const { readDocumentContent } = require('./lib/doc-reader');
 const { createDocumentWatcher } = require('./lib/doc-watcher');
@@ -24,12 +25,11 @@ const { clearSessionBackup, readSessionBackup, writeSessionBackup } = require('.
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const authorizedDocumentPaths = new Set();
 
-let mainWindow = null;
-let isDocumentDirty = false;
-let allowWindowClose = false;
-let closePromptOpen = false;
-let rendererReady = false;
-let pendingSystemDocumentPath = parseFileArg(process.argv);
+const windowContexts = new Map();
+let activeWindow = null;
+let backupOwnerContextId = null;
+const initialStartupDocumentPath = parseFileArg(process.argv);
+let deferredOpenFilePath = null;
 
 // 用户偏好（主题/窗口/缩放），userData/preferences.json 单一事实源。
 const preferencesFilePath = () => path.join(app.getPath('userData'), 'preferences.json');
@@ -81,14 +81,6 @@ function updatePreferences(patch) {
   if (menuBuilt && 'theme' in patch) buildMenu();
 }
 
-// 当前文档的外部修改检测（文件被其他程序改动时提醒，避免保存时无声覆盖）。
-const documentWatcher = createDocumentWatcher({
-  onExternalChange: () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.webContents.send('file:externalChanged', 'modified');
-  }
-});
-
 const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR ||
   (fs.existsSync(path.join(path.dirname(process.execPath), 'portable-mode'))
     ? path.dirname(process.execPath)
@@ -98,28 +90,48 @@ if (portableExecutableDir) {
   app.setPath('userData', path.join(portableExecutableDir, 'data'));
 }
 
+function getWindowContext(event) {
+  return windowContexts.get(event.sender.id) || null;
+}
+
 function isCurrentRenderer(event) {
-  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+  return Boolean(getWindowContext(event));
 }
 
-function focusMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+function currentWindow() {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed() && windowContexts.has(focused.webContents.id)) return focused;
+  if (activeWindow && !activeWindow.isDestroyed()) return activeWindow;
+  return [...windowContexts.values()][0]?.window || null;
 }
 
-function sendPendingSystemDocument() {
-  if (!rendererReady || !mainWindow || mainWindow.isDestroyed() || !pendingSystemDocumentPath) return;
-  const filePath = pendingSystemDocumentPath;
-  pendingSystemDocumentPath = null;
-  mainWindow.webContents.send('system:openDocument', filePath);
+function focusWindow(window) {
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 }
 
-function queueSystemDocument(filePath) {
+function findWindowByDocumentPath(filePath) {
+  const target = pathKey(normalizeDocumentPath(filePath));
+  for (const context of windowContexts.values()) {
+    if (context.documentPath && pathKey(context.documentPath) === target) return context.window;
+  }
+  return null;
+}
+
+function openDocumentWindow(filePath) {
   if (!filePath) return;
-  pendingSystemDocumentPath = filePath;
-  sendPendingSystemDocument();
+  const existing = findWindowByDocumentPath(filePath);
+  if (existing) {
+    focusWindow(existing);
+    return;
+  }
+  focusWindow(createWindow(filePath));
+}
+
+function hasDirtyWindow() {
+  return [...windowContexts.values()].some((context) => context.dirty);
 }
 
 function errorResult(error) {
@@ -138,11 +150,24 @@ function assertAuthorizedDocument(filePath) {
   return normalized;
 }
 
-async function readDocument(filePath) {
+function assertAuthorizedTreePath(filePath, context) {
+  const normalized = normalizeFileSystemPath(filePath);
+  const normalizedKey = pathKey(normalized);
+  const rootKey = context.documentPath ? path.dirname(pathKey(context.documentPath)) : null;
+  if (rootKey && (normalizedKey === rootKey || normalizedKey.startsWith(`${rootKey}${path.sep}`))) {
+    return normalized;
+  }
+  throw new Error('未授权的目录路径');
+}
+
+async function readDocument(filePath, context = null) {
   const normalized = normalizeDocumentPath(filePath);
   const { content } = await readDocumentContent(normalized);
   authorizeDocument(normalized);
-  documentWatcher.watch(normalized);
+  if (context) {
+    context.documentPath = normalized;
+    context.watcher.watch(normalized);
+  }
   recordRecentDocument(normalized);
   return {
     canceled: false,
@@ -150,10 +175,6 @@ async function readDocument(filePath) {
     content,
     baseUrl: getDocumentBaseUrl(normalized)
   };
-}
-
-function stopWatchingActiveDocument() {
-  documentWatcher.stop();
 }
 
 async function getUniqueImagePath(imageDir, fileName) {
@@ -214,11 +235,12 @@ async function openExternalUrl(url) {
   return false;
 }
 
-async function promptForClose() {
-  if (!mainWindow || mainWindow.isDestroyed() || closePromptOpen) return;
-  closePromptOpen = true;
+async function promptForClose(context) {
+  const window = context.window;
+  if (!window || window.isDestroyed() || context.closePromptOpen) return;
+  context.closePromptOpen = true;
   try {
-    const result = await dialog.showMessageBox(mainWindow, {
+    const result = await dialog.showMessageBox(window, {
       type: 'warning',
       title: '保存更改',
       message: '当前文档有尚未保存的更改。',
@@ -229,37 +251,71 @@ async function promptForClose() {
       noLink: true
     });
 
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!window || window.isDestroyed()) return;
     if (result.response === 0) {
-      mainWindow.webContents.send('document:saveBeforeClose');
+      window.webContents.send('document:saveBeforeClose');
     } else if (result.response === 1) {
-      allowWindowClose = true;
-      mainWindow.close();
+      context.dirty = false;
+      if (!hasDirtyWindow()) clearSessionBackup(app.getPath('userData'));
+      context.allowClose = true;
+      window.close();
     }
   } finally {
-    closePromptOpen = false;
+    context.closePromptOpen = false;
   }
 }
 
-function createWindow() {
-  isDocumentDirty = false;
-  allowWindowClose = false;
-  closePromptOpen = false;
-  rendererReady = false;
+function createWindow(startupDocumentPath = null) {
+  const context = {
+    id: null,
+    window: null,
+    dirty: false,
+    allowClose: false,
+    closePromptOpen: false,
+    rendererReady: false,
+    documentPath: startupDocumentPath,
+    startupDocumentPath,
+    watcher: null
+  };
+  context.watcher = createDocumentWatcher({
+    onExternalChange: () => {
+      if (!context.window || context.window.isDestroyed()) return;
+      context.window.webContents.send('file:externalChanged', 'modified');
+    }
+  });
 
-  // 恢复上次的窗口位置：只在 bounds 与当前任一显示器相交时使用。
+  // 首个窗口恢复上次位置；后续文件关联窗口在它旁边级联，保证两个文件夹可见。
   const savedBounds = boundsIntersectDisplay(
     preferences.windowBounds,
     screen.getAllDisplays().map((display) => display.workArea),
   ) ? preferences.windowBounds : null;
+  const existingWindows = [...windowContexts.values()].map((item) => item.window);
+  const referenceWindow = activeWindow && !activeWindow.isDestroyed() ? activeWindow : existingWindows[0];
+  const referenceBounds = referenceWindow ? referenceWindow.getNormalBounds() : null;
+  const workArea = referenceWindow
+    ? screen.getDisplayMatching(referenceWindow.getBounds()).workArea
+    : screen.getPrimaryDisplay().workArea;
+  const width = savedBounds?.width || referenceBounds?.width || 1200;
+  const height = savedBounds?.height || referenceBounds?.height || 800;
+  let x = savedBounds?.x ?? referenceBounds?.x ?? workArea.x;
+  let y = savedBounds?.y ?? referenceBounds?.y ?? workArea.y;
+  if (existingWindows.length) {
+    const cascade = (existingWindows.length % 6 || 1) * 36;
+    x += cascade;
+    y += cascade;
+    if (x + width > workArea.x + workArea.width || y + height > workArea.y + workArea.height) {
+      x = workArea.x + Math.max(0, Math.floor((workArea.width - width) / 2));
+      y = workArea.y + Math.max(0, Math.floor((workArea.height - height) / 2));
+    }
+  }
 
-  mainWindow = new BrowserWindow({
-    width: savedBounds ? savedBounds.width : 1200,
-    height: savedBounds ? savedBounds.height : 800,
+  const window = new BrowserWindow({
+    width,
+    height,
     minWidth: 720,
     minHeight: 500,
-    x: savedBounds ? savedBounds.x : undefined,
-    y: savedBounds ? savedBounds.y : undefined,
+    x,
+    y,
     backgroundColor: '#ffffff',
     show: false,
     title: '未命名.md - Markdown阅读器',
@@ -271,66 +327,72 @@ function createWindow() {
       spellcheck: false
     }
   });
-  if (savedBounds && savedBounds.maximized) mainWindow.maximize();
 
-  void mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  context.window = window;
+  context.id = window.webContents.id;
+  windowContexts.set(context.id, context);
+  if (backupOwnerContextId === null) backupOwnerContextId = context.id;
+  if (!existingWindows.length && savedBounds?.maximized) window.maximize();
+  void window.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   const sendZoomLevel = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.webContents.send('zoom:levelChanged', mainWindow.webContents.getZoomLevel());
+    if (window.isDestroyed()) return;
+    window.webContents.send('zoom:levelChanged', window.webContents.getZoomLevel());
   };
-  // Ctrl+滚轮等手势缩放：Chromium 已应用缩放后发出 zoom-changed。
-  mainWindow.webContents.on('zoom-changed', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) updatePreferences({ zoomLevel: mainWindow.webContents.getZoomLevel() });
+  window.webContents.on('zoom-changed', () => {
+    if (!window.isDestroyed()) updatePreferences({ zoomLevel: window.webContents.getZoomLevel() });
     sendZoomLevel();
   });
-  // 初始缩放级别：先应用持久化值再通知渲染进程（顺序不能反，否则状态栏先闪 100%）。
-  mainWindow.webContents.on('did-finish-load', () => {
-    if (mainWindow && !mainWindow.isDestroyed() && preferences.zoomLevel) {
-      mainWindow.webContents.setZoomLevel(preferences.zoomLevel);
-    }
+  window.webContents.on('did-finish-load', () => {
+    if (!window.isDestroyed() && preferences.zoomLevel) window.webContents.setZoomLevel(preferences.zoomLevel);
     sendZoomLevel();
   });
 
-  // Toast UI Editor (ProseMirror) 的删除线命令绑定了 Ctrl+S 与 Ctrl+Shift+S，
-  // 会调用 preventDefault() 阻止菜单加速键分发。在 main 进程的
-  // before-input-event 中提前拦截，转发给菜单同款 IPC 通道。
-  mainWindow.webContents.on('before-input-event', (event, input) => {
+  // Toast UI 的 Ctrl+S/Ctrl+Shift+S 绑定会抢占菜单加速键，这里提前转发。
+  window.webContents.on('before-input-event', (event, input) => {
     const chord = resolveSaveChord(input);
     if (!chord) return;
     event.preventDefault();
-    mainWindow.webContents.send(chord === 'saveAs' ? 'menu:saveAs' : 'menu:save');
+    window.webContents.send(chord === 'saveAs' ? 'menu:saveAs' : 'menu:save');
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow && mainWindow.show());
-  mainWindow.on('close', (event) => {
-    if (!mainWindow.isDestroyed() && !mainWindow.isMinimized()) {
-      // getNormalBounds 在最大化时也返回还原态尺寸，还原后体验一致。
-      const bounds = mainWindow.getNormalBounds();
+  window.on('focus', () => {
+    activeWindow = window;
+  });
+  window.once('ready-to-show', () => {
+    activeWindow = window;
+    window.show();
+  });
+  window.on('close', (event) => {
+    if (!window.isDestroyed() && !window.isMinimized()) {
+      const bounds = window.getNormalBounds();
       if (boundsIntersectDisplay(bounds, screen.getAllDisplays().map((display) => display.workArea))) {
-        updatePreferences({ windowBounds: { ...bounds, maximized: mainWindow.isMaximized() } });
+        updatePreferences({ windowBounds: { ...bounds, maximized: window.isMaximized() } });
       }
     }
-    // 干净关闭（无未保存内容）时清除崩溃恢复备份。
-    if (!isDocumentDirty) clearSessionBackup(app.getPath('userData'));
-    if (allowWindowClose || !isDocumentDirty) return;
+    if (!context.dirty && !hasDirtyWindow()) clearSessionBackup(app.getPath('userData'));
+    if (context.allowClose || !context.dirty) return;
     event.preventDefault();
-    void promptForClose();
+    void promptForClose(context);
   });
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-    rendererReady = false;
-    stopWatchingActiveDocument();
+  window.on('closed', () => {
+    windowContexts.delete(context.id);
+    context.watcher.stop();
+    if (activeWindow === window) activeWindow = null;
+    if (backupOwnerContextId === context.id) {
+      backupOwnerContextId = [...windowContexts.keys()][0] || null;
+    }
   });
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  window.webContents.on('will-navigate', (event, url) => {
     event.preventDefault();
     void openExternalUrl(url);
   });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url }) => {
     void openExternalUrl(url);
     return { action: 'deny' };
   });
+  return window;
 }
 
 ipcMain.handle('shell:openExternal', async (event, url) => {
@@ -339,8 +401,9 @@ ipcMain.handle('shell:openExternal', async (event, url) => {
 });
 
 ipcMain.handle('file:open', async (event) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const context = getWindowContext(event);
+  if (!context) return errorResult('无效的调用来源');
+  const result = await dialog.showOpenDialog(context.window, {
     title: '打开 Markdown 文件',
     filters: [
       { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'txt'] },
@@ -349,52 +412,67 @@ ipcMain.handle('file:open', async (event) => {
     properties: ['openFile']
   });
   if (result.canceled || result.filePaths.length === 0) return { canceled: true };
+  const existingWindow = findWindowByDocumentPath(result.filePaths[0]);
+  if (existingWindow && existingWindow !== context.window) {
+    focusWindow(existingWindow);
+    return { canceled: true };
+  }
   try {
-    return await readDocument(result.filePaths[0]);
+    return await readDocument(result.filePaths[0], context);
   } catch (error) {
     return errorResult(error);
   }
 });
 
 ipcMain.handle('file:openPath', async (event, filePath) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  const context = getWindowContext(event);
+  if (!context) return errorResult('无效的调用来源');
+  const existingWindow = findWindowByDocumentPath(filePath);
+  if (existingWindow && existingWindow !== context.window) {
+    focusWindow(existingWindow);
+    return { canceled: true };
+  }
   try {
-    return await readDocument(filePath);
+    return await readDocument(filePath, context);
   } catch (error) {
     return errorResult(error);
   }
 });
 
 ipcMain.handle('startup:takeDocument', async (event) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
-  const filePath = pendingSystemDocumentPath;
-  pendingSystemDocumentPath = null;
+  const context = getWindowContext(event);
+  if (!context) return errorResult('无效的调用来源');
+  const filePath = context.startupDocumentPath;
+  context.startupDocumentPath = null;
+  context.documentPath = null;
   if (!filePath) return { canceled: true };
   try {
-    return await readDocument(filePath);
+    return await readDocument(filePath, context);
   } catch (error) {
     return errorResult(error);
   }
 });
 
 ipcMain.on('app:rendererReady', (event) => {
-  if (!isCurrentRenderer(event)) return;
-  rendererReady = true;
-  sendPendingSystemDocument();
+  const context = getWindowContext(event);
+  if (context) context.rendererReady = true;
 });
 
 ipcMain.handle('directory:listForDocument', async (event, filePath) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  const context = getWindowContext(event);
+  if (!context) return errorResult('无效的调用来源');
   try {
-    const documentPath = assertAuthorizedDocument(filePath);
-    return await listDocumentTree(documentPath);
+    const treePath = assertAuthorizedTreePath(filePath, context);
+    const stats = await fsp.stat(treePath);
+    return stats.isDirectory() ? listDirectoryTree(treePath) : listDocumentTree(treePath);
   } catch (error) {
     return errorResult(error);
   }
 });
 
 ipcMain.handle('file:save', async (event, filePath, content) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  const context = getWindowContext(event);
+  if (!context) return errorResult('无效的调用来源');
   if (typeof content !== 'string') return errorResult('文档内容无效');
 
   let targetPath;
@@ -402,7 +480,7 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
     if (filePath) {
       targetPath = assertAuthorizedDocument(filePath);
     } else {
-      const result = await dialog.showSaveDialog(mainWindow, {
+      const result = await dialog.showSaveDialog(context.window, {
         title: '保存 Markdown 文件',
         defaultPath: '未命名.md',
         filters: [
@@ -416,8 +494,9 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
 
     await fsp.writeFile(targetPath, content, 'utf8');
     authorizeDocument(targetPath);
-    await documentWatcher.markOwnWrite(targetPath);
-    documentWatcher.watch(targetPath);
+    context.documentPath = targetPath;
+    await context.watcher.markOwnWrite(targetPath);
+    context.watcher.watch(targetPath);
     recordRecentDocument(targetPath);
     return {
       canceled: false,
@@ -430,8 +509,9 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
 });
 
 ipcMain.handle('document:confirmReplace', async (event) => {
-  if (!isCurrentRenderer(event)) return 'cancel';
-  const result = await dialog.showMessageBox(mainWindow, {
+  const context = getWindowContext(event);
+  if (!context) return 'cancel';
+  const result = await dialog.showMessageBox(context.window, {
     type: 'warning',
     title: '保存更改',
     message: '当前文档有尚未保存的更改。',
@@ -445,11 +525,16 @@ ipcMain.handle('document:confirmReplace', async (event) => {
 });
 
 ipcMain.on('document:setDirty', (event, dirty) => {
-  if (isCurrentRenderer(event)) isDocumentDirty = Boolean(dirty);
+  const context = getWindowContext(event);
+  if (context) context.dirty = Boolean(dirty);
 });
 
 ipcMain.on('document:stopWatching', (event) => {
-  if (isCurrentRenderer(event)) stopWatchingActiveDocument();
+  const context = getWindowContext(event);
+  if (context) {
+    context.documentPath = null;
+    context.watcher.stop();
+  }
 });
 
 // 偏好：渲染进程启动读取一次；局部补丁由主进程防抖落盘。
@@ -465,7 +550,8 @@ ipcMain.on('prefs:set', (event, patch) => {
 
 // ============ 崩溃恢复备份与最近打开 ============
 ipcMain.on('backup:write', (event, session) => {
-  if (!isCurrentRenderer(event)) return;
+  const context = getWindowContext(event);
+  if (!context || context.id !== backupOwnerContextId) return;
   try {
     writeSessionBackup(app.getPath('userData'), session);
   } catch (error) {
@@ -474,12 +560,14 @@ ipcMain.on('backup:write', (event, session) => {
 });
 
 ipcMain.on('backup:clear', (event) => {
-  if (isCurrentRenderer(event)) clearSessionBackup(app.getPath('userData'));
+  const context = getWindowContext(event);
+  if (context && context.id === backupOwnerContextId) clearSessionBackup(app.getPath('userData'));
 });
 
 // 读取并立即清除备份（恢复与否由用户决定，读取后不再保留）。
 ipcMain.handle('backup:take', (event) => {
-  if (!isCurrentRenderer(event)) return null;
+  const context = getWindowContext(event);
+  if (!context || context.id !== backupOwnerContextId) return null;
   try {
     return readSessionBackup(app.getPath('userData'));
   } finally {
@@ -488,14 +576,14 @@ ipcMain.handle('backup:take', (event) => {
 });
 
 ipcMain.handle('backup:confirmRestore', async (event, info) => {
-  if (!isCurrentRenderer(event)) return 'discard';
-  if (!mainWindow || mainWindow.isDestroyed()) return 'discard';
+  const context = getWindowContext(event);
+  if (!context || context.window?.isDestroyed()) return 'discard';
   const detailParts = [];
   if (info && Number.isFinite(info.savedAt) && info.savedAt > 0) {
     detailParts.push(`最后修改：${new Date(info.savedAt).toLocaleString('zh-CN')}`);
   }
   detailParts.push(info && info.filePath ? `文档：${info.filePath}` : '文档：未命名（未保存过）');
-  const result = await dialog.showMessageBox(mainWindow, {
+  const result = await dialog.showMessageBox(context.window, {
     type: 'warning',
     title: '恢复未保存内容',
     message: '检测到上次未保存的内容',
@@ -613,14 +701,15 @@ ipcMain.handle('print:document', async (event, markdown) => {
 });
 
 ipcMain.handle('export:document', async (event, format, markdown, suggestedPath) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  const context = getWindowContext(event);
+  if (!context) return errorResult('无效的调用来源');
   if (typeof markdown !== 'string') return errorResult('文档内容无效');
   if (format !== 'pdf' && format !== 'html') return errorResult('不支持的导出格式');
   try {
     const defaultPath = typeof suggestedPath === 'string' && suggestedPath.trim()
       ? suggestedPath.trim()
       : `未命名.${format}`;
-    const dialogResult = await dialog.showSaveDialog(mainWindow, {
+    const dialogResult = await dialog.showSaveDialog(context.window, {
       title: format === 'pdf' ? '导出 PDF' : '导出 HTML',
       defaultPath,
       filters: format === 'pdf'
@@ -636,7 +725,7 @@ ipcMain.handle('export:document', async (event, format, markdown, suggestedPath)
     } else {
       await fsp.writeFile(targetPath, buildExportHtmlDocument(targetPath, result.body), 'utf8');
     }
-    if (mainWindow && !mainWindow.isDestroyed()) shell.showItemInFolder(targetPath);
+    if (context.window && !context.window.isDestroyed()) shell.showItemInFolder(targetPath);
     return { canceled: false, filePath: targetPath };
   } catch (error) {
     return errorResult(error);
@@ -644,10 +733,11 @@ ipcMain.handle('export:document', async (event, format, markdown, suggestedPath)
 });
 
 ipcMain.on('window:closeAfterSave', (event) => {
-  if (!isCurrentRenderer(event) || !mainWindow) return;
-  isDocumentDirty = false;
-  allowWindowClose = true;
-  mainWindow.close();
+  const context = getWindowContext(event);
+  if (!context?.window) return;
+  context.dirty = false;
+  context.allowClose = true;
+  context.window.close();
 });
 
 ipcMain.handle('theme:getSystem', (event) => {
@@ -667,19 +757,21 @@ ipcMain.handle('image:saveBlob', async (event, mdFilePath, fileName, arrayBuffer
 function buildMenu() {
   const isMac = process.platform === 'darwin';
   const sendCommand = (name, payload) => {
-    mainWindow?.webContents.send('editor:command', name, payload);
+    currentWindow()?.webContents.send('editor:command', name, payload);
   };
   const changeZoom = (delta) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    const contents = mainWindow.webContents;
+    const window = currentWindow();
+    if (!window || window.isDestroyed()) return;
+    const contents = window.webContents;
     const next = delta === null ? 0 : contents.getZoomLevel() + delta;
     contents.setZoomLevel(next);
     updatePreferences({ zoomLevel: contents.getZoomLevel() });
     contents.send('zoom:levelChanged', contents.getZoomLevel());
   };
   const showInfoDialog = (options) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    dialog.showMessageBox(mainWindow, options);
+    const window = currentWindow();
+    if (!window || window.isDestroyed()) return;
+    dialog.showMessageBox(window, options);
   };
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
@@ -687,10 +779,11 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => sendCommand('new') },
-        { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => mainWindow?.webContents.send('menu:open') },
+        { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => focusWindow(createWindow()) },
+        { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => currentWindow()?.webContents.send('menu:open') },
         // Ctrl+S 实际由 before-input-event 拦截转发；这里只显示快捷键（registerAccelerator: false）。
-        { label: '保存', accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu:save') },
-        { label: '另存为…', accelerator: 'CmdOrCtrl+Shift+S', click: () => mainWindow?.webContents.send('menu:saveAs') },
+        { label: '保存', accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: () => currentWindow()?.webContents.send('menu:save') },
+        { label: '另存为…', accelerator: 'CmdOrCtrl+Shift+S', click: () => currentWindow()?.webContents.send('menu:saveAs') },
         { type: 'separator' },
         { label: '打印…', accelerator: 'CmdOrCtrl+P', click: () => sendCommand('print') },
         {
@@ -707,8 +800,7 @@ function buildMenu() {
             ...recentEntries.map((entry) => ({
               label: path.basename(entry.path),
               click: () => {
-                queueSystemDocument(entry.path);
-                focusMainWindow();
+                openDocumentWindow(entry.path);
               }
             })),
             { type: 'separator' },
@@ -784,14 +876,16 @@ function buildMenu() {
         { type: 'separator' },
         { label: '切换源码/所见即所得', accelerator: 'CmdOrCtrl+/', click: () => sendCommand('toggleMode') },
         { type: 'separator' },
-        { label: '切换主题', accelerator: 'CmdOrCtrl+Shift+T', click: () => mainWindow?.webContents.send('menu:toggleTheme') },
+        { label: '切换主题', accelerator: 'CmdOrCtrl+Shift+T', click: () => currentWindow()?.webContents.send('menu:toggleTheme') },
         {
           label: '跟随系统主题',
           type: 'checkbox',
           checked: preferences.theme === 'system',
           click: () => {
             updatePreferences({ theme: 'system' });
-            mainWindow?.webContents.send('editor:command', 'followSystemTheme');
+            for (const context of windowContexts.values()) {
+              context.window?.webContents.send('editor:command', 'followSystemTheme');
+            }
           }
         },
         {
@@ -846,6 +940,7 @@ function buildMenu() {
             detail: [
               '打开文档：双击 .md 文件、右键“使用 Markdown阅读器打开”、Ctrl+O 或拖拽文件。',
               '新建文档：直接双击阅读器程序，或按 Ctrl+N。',
+              '多窗口：再次通过文件关联打开其他文件夹文档会新建窗口；Ctrl+Shift+N 可新建空白窗口。',
               '保存：Ctrl+S 保存，Ctrl+Shift+S 另存为。',
               '文件侧边栏：显示当前文档目录，点击文件切换；按 Ctrl+Shift+E 可收起或展开。',
               '大纲面板：侧边栏“大纲”页列出全部标题，点击跳转；按 Ctrl+Shift+O 打开。',
@@ -877,27 +972,34 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
-    queueSystemDocument(parseFileArg(argv));
-    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-    focusMainWindow();
+    const filePath = parseFileArg(argv);
+    if (filePath) {
+      openDocumentWindow(filePath);
+      return;
+    }
+    if (windowContexts.size === 0) createWindow();
+    focusWindow(currentWindow());
   });
 
   app.on('open-file', (event, filePath) => {
     event.preventDefault();
-    queueSystemDocument(parseFileArg([process.execPath, filePath]));
-    if (app.isReady() && (!mainWindow || mainWindow.isDestroyed())) createWindow();
-    focusMainWindow();
+    if (!app.isReady()) {
+      deferredOpenFilePath = filePath;
+      return;
+    }
+    openDocumentWindow(filePath);
   });
 
   app.whenReady().then(() => {
-    createWindow();
+    createWindow(deferredOpenFilePath || initialStartupDocumentPath);
+    deferredOpenFilePath = null;
     buildMenu();
 
     nativeTheme.on('updated', () => {
-      mainWindow?.webContents.send(
-        'theme:systemChanged',
-        nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-      );
+      const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+      for (const context of windowContexts.values()) {
+        context.window?.webContents.send('theme:systemChanged', theme);
+      }
     });
 
     app.on('activate', () => {

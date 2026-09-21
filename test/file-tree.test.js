@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { listDocumentTree } = require('../lib/file-tree');
+const { listDirectoryTree, listDocumentTree } = require('../lib/file-tree');
 
 test('document tree contains supported files and useful subdirectories only', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'md-reader-tree-'));
@@ -32,6 +32,30 @@ test('document tree contains supported files and useful subdirectories only', as
       { type: 'file', name: '说明.txt' },
     ]);
     assert.equal(result.entries[0].children[0].name, '第一章.markdown');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('directory tree can use a selected directory as its root', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'md-reader-directory-tree-'));
+  try {
+    const selected = path.join(root, '_selected');
+    await fs.mkdir(path.join(selected, 'nested'), { recursive: true });
+    await Promise.all([
+      fs.writeFile(path.join(root, 'root.md'), '# root'),
+      fs.writeFile(path.join(selected, 'selected.md'), '# selected'),
+      fs.writeFile(path.join(selected, 'nested', 'nested.md'), '# nested'),
+    ]);
+
+    const result = await listDirectoryTree(selected);
+    assert.equal(result.rootPath, selected);
+    assert.equal(result.rootName, '_selected');
+    assert.deepEqual(result.entries.map(({ type, name }) => ({ type, name })), [
+      { type: 'directory', name: 'nested' },
+      { type: 'file', name: 'selected.md' },
+    ]);
+    assert.equal(result.entries[0].children[0].name, 'nested.md');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

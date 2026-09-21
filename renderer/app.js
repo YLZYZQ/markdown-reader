@@ -21,6 +21,7 @@ const fileTreeEl = document.getElementById('file-tree');
 const sidebarRootEl = document.getElementById('sidebar-root');
 const sidebarButtonEl = document.getElementById('btn-sidebar');
 const sidebarRefreshButtonEl = document.getElementById('btn-sidebar-refresh');
+const sidebarUpButtonEl = document.getElementById('btn-tree-up');
 const tabFilesEl = document.getElementById('tab-files');
 const tabOutlineEl = document.getElementById('tab-outline');
 const outlinePanelEl = document.getElementById('outline-panel');
@@ -43,6 +44,8 @@ let currentEditMode = 'wysiwyg';
 let currentFindMatch = -1;
 let lastFindSignature = '';
 let fileTreeRequestId = 0;
+let fileTreeRootPath = null;
+let fileTreeHomePath = null;
 let sidebarCollapsed = false;
 let pendingSystemDocumentPath = null;
 let autoSaveEnabled = false;
@@ -415,6 +418,12 @@ function comparablePath(filePath) {
   return String(filePath || '').replace(/\\/g, '/').toLocaleLowerCase();
 }
 
+function pathContains(rootPath, targetPath) {
+  const root = comparablePath(rootPath).replace(/\/+$/, '');
+  const target = comparablePath(targetPath).replace(/\/+$/, '');
+  return Boolean(root) && (target === root || target.startsWith(`${root}/`));
+}
+
 function setSidebarCollapsed(collapsed, persist = true) {
   sidebarCollapsed = Boolean(collapsed);
   workspaceEl.classList.toggle('sidebar-collapsed', sidebarCollapsed);
@@ -438,6 +447,9 @@ function clearFileTree(message = '打开或保存文档后，将显示同目录�
   fileTreeEl.appendChild(empty);
   sidebarRootEl.textContent = '尚未打开文档';
   sidebarRootEl.title = '尚未打开文档';
+  fileTreeRootPath = null;
+  fileTreeHomePath = null;
+  sidebarUpButtonEl.hidden = true;
 }
 
 function treeEntryContainsPath(entry, targetPath) {
@@ -452,14 +464,24 @@ function createTreeEntry(entry, activePath) {
     details.open = entry.children.some((child) => treeEntryContainsPath(child, activePath));
 
     const summary = document.createElement('summary');
-    summary.title = entry.path;
+    summary.title = `${entry.path}\n单击进入文件夹；左侧箭头展开或折叠`;
+    const chevron = document.createElement('span');
+    chevron.className = 'tree-chevron';
+    chevron.textContent = '›';
+    chevron.title = '展开或折叠';
+    chevron.setAttribute('aria-hidden', 'true');
     const icon = document.createElement('span');
     icon.className = 'tree-icon';
     icon.textContent = '▱';
     const name = document.createElement('span');
     name.className = 'tree-name';
     name.textContent = entry.name;
-    summary.append(icon, name);
+    summary.append(chevron, icon, name);
+    summary.addEventListener('click', (event) => {
+      if (event.target.closest('.tree-chevron')) return;
+      event.preventDefault();
+      void navigateFileTree(entry.path);
+    });
     details.appendChild(summary);
 
     const children = document.createElement('div');
@@ -487,25 +509,34 @@ function createTreeEntry(entry, activePath) {
   return button;
 }
 
-async function refreshFileTree(filePath = currentFilePath) {
+async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
   if (!filePath) {
     fileTreeRequestId += 1;
     clearFileTree();
     return;
   }
 
+  const keepCurrentRoot = !rootPath && fileTreeRootPath && pathContains(fileTreeRootPath, filePath);
+  const requestPath = rootPath || (keepCurrentRoot ? fileTreeRootPath : filePath);
+  if (!fileTreeHomePath || !pathContains(fileTreeHomePath, filePath)) {
+    fileTreeHomePath = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+  }
   const requestId = ++fileTreeRequestId;
   sidebarRefreshButtonEl.classList.add('loading');
   try {
-    const result = await window.api.listDirectoryForDocument(filePath);
+    const result = await window.api.listDirectoryForDocument(requestPath);
     if (requestId !== fileTreeRequestId) return;
     if (result.error) {
       clearFileTree('无法读取当前文档目录：' + result.error);
       return;
     }
 
+    fileTreeRootPath = result.rootPath;
     sidebarRootEl.textContent = result.rootName;
     sidebarRootEl.title = result.rootPath;
+    sidebarUpButtonEl.hidden = !fileTreeHomePath ||
+      !pathContains(fileTreeHomePath, fileTreeRootPath) ||
+      comparablePath(fileTreeRootPath) === comparablePath(fileTreeHomePath);
     fileTreeEl.replaceChildren();
     const activePath = comparablePath(currentFilePath);
     result.entries.forEach((entry) => fileTreeEl.appendChild(createTreeEntry(entry, activePath)));
@@ -528,6 +559,18 @@ async function refreshFileTree(filePath = currentFilePath) {
   }
 }
 
+function navigateFileTree(rootPath) {
+  if (!rootPath || rootPath === fileTreeRootPath) return Promise.resolve();
+  return refreshFileTree(currentFilePath, rootPath);
+}
+
+function goUpFileTree() {
+  if (!fileTreeRootPath || !fileTreeHomePath) return;
+  const parentPath = fileTreeRootPath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+  if (!pathContains(fileTreeHomePath, parentPath)) return;
+  void refreshFileTree(currentFilePath, parentPath);
+}
+
 async function openDocumentFromSidebar(filePath) {
   if (comparablePath(filePath) === comparablePath(currentFilePath)) return;
   if (!(await confirmBeforeReplace())) return;
@@ -535,7 +578,7 @@ async function openDocumentFromSidebar(filePath) {
     const result = await window.api.openPath(filePath);
     if (result.error) {
       toast('打开失败: ' + result.error);
-      void refreshFileTree();
+      void refreshFileTree(currentFilePath, fileTreeRootPath);
       return;
     }
     loadContent(result.filePath, result.content, result.baseUrl);
@@ -1210,7 +1253,8 @@ document.getElementById('btn-new').addEventListener('click', () => newDocument()
 document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
 sidebarButtonEl.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
-sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree());
+sidebarUpButtonEl.addEventListener('click', goUpFileTree);
+sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree(currentFilePath, fileTreeRootPath));
 tabFilesEl.addEventListener('click', () => setSidebarTab('files'));
 tabOutlineEl.addEventListener('click', () => setSidebarTab('outline'));
 document.getElementById('btn-find').addEventListener('click', () => showFindPanel(false));

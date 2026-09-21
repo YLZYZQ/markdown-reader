@@ -257,15 +257,16 @@ body {
   color: var(--muted);
 }
 .tree-directory > summary::-webkit-details-marker { display: none; }
-.tree-directory > summary::before {
-  content: "›";
-  width: 10px;
-  flex: 0 0 10px;
+.tree-chevron {
+  display: inline-block;
+  flex: 0 0 14px;
+  width: 14px;
+  margin-left: -2px;
   font-size: 15px;
   transform: rotate(0deg);
   transition: transform 0.12s ease;
 }
-.tree-directory[open] > summary::before { transform: rotate(90deg); }
+.tree-directory[open] > summary .tree-chevron { transform: rotate(90deg); }
 .tree-directory > summary:hover,
 .tree-file:hover { background: var(--btn-bg-hover); color: var(--fg); }
 .tree-directory > summary:focus-visible,
@@ -322,6 +323,7 @@ body {
   display: flex;
   flex-direction: column;
 }
+#outline-panel[hidden] { display: none; }
 .outline-list {
   flex: 1;
   overflow: auto;

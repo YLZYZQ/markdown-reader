@@ -1,7 +1,7 @@
 {
   "name": "md-reader",
-  "version": "1.5.2",
-  "description": "一个像 Typora 的 Markdown 阅读器/编辑器（Electron + Toast UI Editor，免安装）",
+  "version": "1.5.5",
+  "description": "Markdown阅读器",
   "main": "main.js",
   "author": "",
   "license": "MIT",
@@ -18,7 +18,9 @@
     "test:reading": "electron test/reading-electron.js",
     "test:search": "electron test/search-electron.js",
     "test:link": "electron test/link-electron.js",
-    "test:close": "electron test/close-electron.js"
+    "test:close": "electron test/close-electron.js",
+    "test:multi-window": "electron test/multi-window-electron.js",
+    "test:sidebar": "electron test/sidebar-electron.js"
   },
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",
@@ -29,11 +31,13 @@
   "devDependencies": {
     "electron": "^31.3.0",
     "electron-builder": "^25.0.0",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "rcedit": "^5.0.2"
   },
   "build": {
     "appId": "com.local.mdreader",
     "productName": "Markdown阅读器",
+    "afterPack": "scripts/after-pack.js",
     "directories": {
       "output": "release"
     },
@@ -64,10 +68,12 @@
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe",
       "requestExecutionLevel": "user",
-      "unpackDirName": "MarkdownReader"
+      "unpackDirName": "Markdown阅读器"
     },
     "nsis": {
-      "artifactName": "MarkdownReader-Setup-${version}.${ext}",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",

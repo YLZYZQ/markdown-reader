@@ -5,11 +5,14 @@ const path = require('node:path');
 
 const projectDir = path.resolve(__dirname, '..');
 const packageJson = require(path.join(projectDir, 'package.json'));
+const productName = packageJson.build.productName;
 const electronDist = path.join(projectDir, 'node_modules', 'electron', 'dist');
+const rceditExecutable = path.join(projectDir, 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe');
+const iconPath = path.join(projectDir, 'build', 'icon.ico');
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'md-reader-portable-'));
-const portableRoot = path.join(temporaryRoot, 'MarkdownReader');
+const portableRoot = path.join(temporaryRoot, productName);
 const releaseDir = path.join(projectDir, 'release');
-const artifactName = `MarkdownReader-Portable-${packageJson.version}.zip`;
+const artifactName = `${productName}-Portable-${packageJson.version}.zip`;
 const artifactPath = path.join(releaseDir, artifactName);
 
 const appFiles = [
@@ -39,8 +42,25 @@ try {
 
   fs.renameSync(
     path.join(portableRoot, 'electron.exe'),
-    path.join(portableRoot, 'MarkdownReader.exe'),
+    path.join(portableRoot, `${productName}.exe`),
   );
+  const executablePath = path.join(portableRoot, `${productName}.exe`);
+  const rceditArgs = [
+    executablePath,
+    '--set-icon', iconPath,
+    '--set-version-string', 'FileDescription', productName,
+    '--set-version-string', 'ProductName', productName,
+    '--set-version-string', 'InternalName', productName,
+    '--set-version-string', 'OriginalFilename', `${productName}.exe`,
+    '--set-file-version', packageJson.version,
+    '--set-product-version', packageJson.version,
+  ];
+  const rceditResult = spawnSync(rceditExecutable, rceditArgs, { stdio: 'inherit' });
+  if (rceditResult.error) throw rceditResult.error;
+  if (rceditResult.status !== 0) {
+    process.exitCode = rceditResult.status || 1;
+    return;
+  }
   fs.writeFileSync(path.join(portableRoot, 'portable-mode'), '1\n');
   fs.writeFileSync(
     path.join(portableRoot, '使用说明.txt'),
@@ -48,7 +68,7 @@ try {
       'Markdown阅读器（免安装版）',
       '',
       '1. 请先完整解压 ZIP 文件。',
-      '2. 双击 MarkdownReader.exe 启动。',
+      `2. 双击 ${productName}.exe 启动。`,
       '3. 程序数据保存在当前目录的 data 文件夹中。',
       '',
       '本程序暂未使用商业代码签名证书。开启 Windows 智能应用控制的设备仍可能阻止运行。',
@@ -64,7 +84,7 @@ try {
   const systemTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
   const result = spawnSync(
     systemTar,
-    ['-a', '-c', '-f', artifactPath, '-C', temporaryRoot, 'MarkdownReader'],
+    ['-a', '-c', '-f', artifactPath, '-C', temporaryRoot, productName],
     { stdio: 'inherit' },
   );
   if (result.error) {
