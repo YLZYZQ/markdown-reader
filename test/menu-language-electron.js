@@ -76,7 +76,8 @@ async function snapshot(win) {
     settings: document.querySelector('#reading-settings h2').textContent,
     theme: document.querySelector('#btn-theme').title,
     bold: document.querySelector('.toastui-editor-toolbar-icons.bold').getAttribute('aria-label'),
-    words: document.querySelector('#word-count').textContent
+    words: document.querySelector('#word-count').textContent,
+    iconLoaded: document.querySelector('.file-icon').naturalWidth > 0
   }))()`);
 }
 
@@ -141,6 +142,7 @@ app.whenReady().then(async () => {
     await wait(350);
     assert.equal(dialogs[0].title, '打开 Markdown 文件');
     const beforeEnglish = await prepareEdit(window, 'wysiwyg');
+    assert(beforeEnglish.iconLoaded, 'App icon must load after the document base URL changes');
     assert(beforeEnglish.scroll > 0, 'Fixture must be scrolled');
     assert(english, 'English menu item not found');
     english.click(english, window, {});
@@ -182,6 +184,7 @@ app.whenReady().then(async () => {
     assert.equal(await help.webContents.executeJavaScript('document.documentElement.lang'), 'en-US');
     assert.match(await help.webContents.executeJavaScript('document.title'), /About/);
     assert.match(await help.webContents.executeJavaScript('document.querySelector("#about").innerText'), /Core Experience/);
+    assert.equal(await help.webContents.executeJavaScript('[...document.querySelectorAll("img")].filter(img => img.complete && img.naturalWidth > 0).length'), 3);
 
     const secondDirectory = path.join(userData, 'second');
     fs.mkdirSync(secondDirectory);

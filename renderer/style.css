@@ -126,7 +126,7 @@ body {
   gap: 8px;
   overflow: hidden;
 }
-.file-icon { font-size: 16px; }
+.file-icon { width: 24px; height: 24px; object-fit: contain; flex-shrink: 0; }
 .filename {
   font-size: 13px;
   color: var(--muted);

@@ -107,6 +107,13 @@ body {
   white-space: nowrap;
 }
 
+.aside-brand img, .quick-icon img, .brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .help-nav {
   height: 36px;
   border: 0;

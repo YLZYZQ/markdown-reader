@@ -23,6 +23,7 @@ const appFiles = [
   'THIRD_PARTY_NOTICES.md',
   'THIRD_PARTY_LICENSES.md',
   'lib',
+  'build',
   'renderer',
 ];
 

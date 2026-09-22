@@ -31,6 +31,7 @@ const outlineListEl = document.getElementById('outline-list');
 
 // 后续会把 <base> 指向当前文档目录；先固定应用自身样式资源的绝对地址。
 document.querySelectorAll('link[href]').forEach((link) => link.setAttribute('href', link.href));
+document.querySelectorAll('.file-icon[src]').forEach((icon) => icon.setAttribute('src', icon.src));
 
 // ============ 状态 ============
 let editor = null;

@@ -1,6 +1,6 @@
 {
   "name": "md-reader",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "description": "Markdown阅读器",
   "main": "main.js",
   "author": "",
@@ -52,6 +52,8 @@
       "THIRD_PARTY_NOTICES.md",
       "THIRD_PARTY_LICENSES.md",
       "lib/**/*",
+      "build/icon.ico",
+      "build/icon.png",
       "renderer/**/*"
     ],
     "win": {

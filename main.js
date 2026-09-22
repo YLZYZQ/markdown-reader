@@ -439,6 +439,7 @@ function createWindow(startupDocumentPath = null) {
     backgroundColor: themeBackgroundColor(resolvedTheme()),
     show: false,
     title: `${appI18n.t(preferences.menuLanguage, 'untitled')} - ${preferences.menuLanguage === 'en-US' ? 'Markdown Reader' : 'Markdown阅读器'}`,
+    icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1143,6 +1144,7 @@ function showHelpWindow(section = 'guide') {
     backgroundColor: themeBackgroundColor(theme),
     show: false,
     title: appI18n.t(preferences.menuLanguage, 'helpTitle'),
+    icon: path.join(__dirname, 'build', 'icon.ico'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1199,6 +1201,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    if (process.platform === 'win32') app.setAppUserModelId('com.local.mdreader');
     createWindow(deferredOpenFilePath || initialStartupDocumentPath);
     deferredOpenFilePath = null;
     buildMenu();
