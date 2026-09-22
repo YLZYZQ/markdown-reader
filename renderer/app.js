@@ -55,6 +55,8 @@ let autoSaveEnabled = false;
 let autoSaveTimer = null;
 let backupTimer = null;
 let saveInFlight = false;
+let pendingSave = null;
+let documentTransitionInFlight = false;
 let editorFontPrefs = { size: 16, family: '' };
 let currentLanguage = 'zh-CN';
 try {
@@ -444,11 +446,10 @@ function applyLanguageChrome() {
   }
 
   const fontOptions = document.querySelectorAll('#font-size option');
-  const fontLabels = ['14 px', '16 px', '18 px', '20 px', '22 px'];
-  fontOptions.forEach((option, index) => {
-    if (index === 1) option.textContent = `16 px · ${tr('settings.comfortable')}`;
-    else if (index === 3) option.textContent = `20 px · ${tr('settings.large')}`;
-    else option.textContent = fontLabels[index];
+  fontOptions.forEach((option) => {
+    if (option.value === '16') option.textContent = `16 px · ${tr('settings.comfortable')}`;
+    else if (option.value === '20') option.textContent = `20 px · ${tr('settings.large')}`;
+    else option.textContent = `${option.value} px`;
   });
   const widthOptions = document.querySelectorAll('#line-width option');
   widthOptions.forEach((option, index) => {
@@ -523,7 +524,19 @@ function scrollToEditorAnchor(hash) {
     headings.find((heading) => heading.id === fragment ||
       headingSlug(heading.textContent) === headingSlug(fragment) ||
       heading.textContent.trim() === fragment);
-  target?.scrollIntoView({ block: 'start' });
+  if (!target) return;
+  if (editor.isMarkdownMode()) {
+    // 同时定位源码，避免预览完成后的双栏同步把锚点拉回原来的源码位置。
+    const entry = extractOutline(editor.getMarkdown())[headings.indexOf(target)];
+    if (entry) {
+      editor.setSelection([entry.line, 1], [entry.line, 1]);
+      scrollEditorSelectionIntoView();
+      // 替换仍在执行的双栏滚动动画，而不只是设置一次预览 scrollTop。
+      editor.scrollSync.syncPreviewScrollTop();
+    }
+  }
+  const scroller = editor.isMarkdownMode() ? active.parentElement : active;
+  scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 16;
 }
 
 function watchEditorLinks() {
@@ -539,6 +552,8 @@ function watchEditorLinks() {
     }
     if ((link.getAttribute('href') || '').startsWith('#')) {
       event.preventDefault();
+      // Toast UI 预览点击会定位到“被点击的链接”源码；由我们导航时不要再触发它。
+      event.stopPropagation();
       scrollToEditorAnchor(url.hash);
       return;
     }
@@ -745,18 +760,7 @@ function goUpFileTree() {
 
 async function openDocumentFromSidebar(filePath) {
   if (comparablePath(filePath) === comparablePath(currentFilePath)) return;
-  if (!(await confirmBeforeReplace())) return;
-  try {
-    const result = await window.api.openPath(filePath);
-    if (result.error) {
-      toast(tr('messages.openFailed', { error: result.error }));
-      void refreshFileTree(currentFilePath, fileTreeRootPath);
-      return;
-    }
-    loadContent(result.filePath, result.content, result.baseUrl);
-  } catch (error) {
-    toast(tr('messages.openFailed', { error: error.message }));
-  }
+  return openDocumentFromPath(filePath);
 }
 
 // ============ 大纲面板 ============
@@ -969,17 +973,55 @@ async function confirmBeforeReplace() {
   try {
     const choice = await window.api.confirmReplace();
     if (choice === 'discard') return true;
-    if (choice === 'save') return saveFile(false);
+    if (choice === 'save') return saveFile(false, { allowTransition: true });
   } catch (error) {
     toast(tr('messages.confirmReplaceFailed', { error: error.message }));
   }
   return false;
 }
 
+// Serialize document changes within a window. Editing may continue during a
+// save, but a late save result must never change the next document's identity.
+async function withDocumentTransition(operation) {
+  if (documentTransitionInFlight) return false;
+  documentTransitionInFlight = true;
+  try {
+    if (pendingSave) await pendingSave;
+    return await operation();
+  } catch (error) {
+    toast(tr('messages.openFailed', { error: error.message }));
+    return false;
+  } finally {
+    documentTransitionInFlight = false;
+    if (isDirty) scheduleAutoSave();
+  }
+}
+
+async function openDocumentResult(read) {
+  if (!(await confirmBeforeReplace())) return false;
+  const beforeRead = editor.getMarkdown();
+  const result = await read();
+  if (!result || result.canceled) return false;
+  if (result.error) {
+    toast(tr('messages.openFailed', { error: result.error }));
+    return false;
+  }
+  if (editor.getMarkdown() !== beforeRead && !(await confirmBeforeReplace())) return false;
+  loadContent(result.filePath, result.content, result.baseUrl);
+  return true;
+}
+
+function openDocumentFromPath(filePath) {
+  return withDocumentTransition(() => openDocumentResult(() => window.api.openPath(filePath)));
+}
+
 // 文档替换（新建/打开另一份文件）时重建编辑器：
 // setMarkdown 的事务会留在撤销历史里，旧文档内容可能被 Ctrl+Z 带回新文档；
 // 重建是清空历史最可靠的方式（主题切换不再重建，历史只在换文档时重置）。
 function replaceEditorContent(content) {
+  clearTimeout(autoSaveTimer);
+  clearTimeout(backupTimer);
+  autoSaveTimer = backupTimer = null;
   editor.destroy();
   editor = createEditor(content);
   window.editor = editor;
@@ -988,61 +1030,47 @@ function replaceEditorContent(content) {
   lastFindSignature = '';
 }
 
-async function newDocument() {
-  if (!(await confirmBeforeReplace())) return false;
-  currentFilePath = null;
-  fileTreeRequestId += 1;
-  lastSavedContent = '';
-  setDocumentBase(null);
-  clearFileTree();
-  replaceEditorContent('');
-  findPanelEl.hidden = true;
-  setDirty(false);
-  updateTitle();
-  updateWordCount();
-  setStatus(tr('status.newBlank'));
-  toast(tr('messages.newDocument'));
-  window.api.stopWatchingDocument();
-  discardSessionBackup();
-  editor.focus();
-  return true;
+function newDocument() {
+  return withDocumentTransition(async () => {
+    if (!(await confirmBeforeReplace())) return false;
+    currentFilePath = null;
+    fileTreeRequestId += 1;
+    lastSavedContent = '';
+    setDocumentBase(null);
+    clearFileTree();
+    replaceEditorContent('');
+    findPanelEl.hidden = true;
+    setDirty(false);
+    updateTitle();
+    updateWordCount();
+    setStatus(tr('status.newBlank'));
+    toast(tr('messages.newDocument'));
+    window.api.stopWatchingDocument();
+    discardSessionBackup();
+    editor.focus();
+    return true;
+  });
 }
 
-async function openFile() {
-  try {
-    const res = await window.api.openFile();
-    if (res.canceled) return;
-    if (res.error) { toast(tr('messages.openFailed', { error: res.error })); return; }
-    if (!(await confirmBeforeReplace())) return;
-    loadContent(res.filePath, res.content, res.baseUrl);
-  } catch (error) {
-    toast(tr('messages.openFailed', { error: error.message }));
-  }
+function openFile() {
+  return withDocumentTransition(() => openDocumentResult(() => window.api.openFile()));
 }
 
 async function openSystemDocument(filePath) {
   if (!filePath || comparablePath(filePath) === comparablePath(currentFilePath)) return;
-  if (!(await confirmBeforeReplace())) return;
-  try {
-    const result = await window.api.openPath(filePath);
-    if (result.error) {
-      toast(tr('messages.openFailed', { error: result.error }));
-      return;
-    }
-    loadContent(result.filePath, result.content, result.baseUrl);
-  } catch (error) {
-    toast(tr('messages.openFailed', { error: error.message }));
-  }
+  return openDocumentFromPath(filePath);
 }
 
-function loadContent(filePath, content, baseUrl) {
+function loadContent(filePath, content, baseUrl, options = {}) {
+  if (!options.restoring) discardSessionBackup();
   currentFilePath = filePath || null;
   setDocumentBase(baseUrl);
   replaceEditorContent(content);
   // Toast UI 可能规范化末尾换行；以编辑器实际内容作为已保存基线，避免刚打开就误报修改。
-  lastSavedContent = editor.getMarkdown();
+  lastSavedContent = options.restoring ? null : editor.getMarkdown();
   findPanelEl.hidden = true;
-  setDirty(false);
+  setDirty(Boolean(options.restoring));
+  if (filePath) window.api.activateDocument(filePath);
   updateTitle();
   const displayName = filePath ? baseName(filePath) : tr('untitled');
   setStatus(tr('status.opened', { name: displayName }));
@@ -1056,8 +1084,10 @@ function loadContent(filePath, content, baseUrl) {
 // 内容变更 1 秒防抖写入备份（始终开启）；自动保存（可选）2 秒防抖静默保存。
 function scheduleSessionBackup() {
   if (backupTimer) clearTimeout(backupTimer);
+  if (!isDirty) { discardSessionBackup(); return; }
   backupTimer = setTimeout(() => {
     backupTimer = null;
+    if (!isDirty) return;
     try {
       window.api.writeBackup({
         filePath: currentFilePath,
@@ -1085,7 +1115,7 @@ function setAutoSaveEnabled(enabled) {
 }
 
 function scheduleAutoSave() {
-  if (!autoSaveEnabled || !currentFilePath || !isDirty) return;
+  if (!autoSaveEnabled || !currentFilePath || !isDirty || documentTransitionInFlight) return;
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
     autoSaveTimer = null;
@@ -1095,45 +1125,64 @@ function scheduleAutoSave() {
   }, 2000);
 }
 
-async function saveFile(saveAs = false, options = {}) {
-  if (saveInFlight) return false;
+function saveFile(saveAs = false, options = {}) {
+  if (pendingSave) return pendingSave;
+  if (documentTransitionInFlight && !options.allowTransition) return Promise.resolve(false);
+  options = { ...options };
   saveInFlight = true;
+  pendingSave = performSave(saveAs, options).finally(() => {
+    saveInFlight = false;
+    pendingSave = null;
+    if (options.savedWithNewEdits) scheduleAutoSave();
+  });
+  return pendingSave;
+}
+
+async function performSave(saveAs, options) {
+  const sourceEditor = editor;
   try {
     const content = editor.getMarkdown();
     const target = saveAs ? null : currentFilePath;
     const res = await window.api.saveFile(target, content);
     if (res.canceled) return false;
     if (res.error) { toast(tr('messages.saveFailed', { error: res.error })); return false; }
+    if (editor !== sourceEditor) return false;
     currentFilePath = res.filePath;
     lastSavedContent = content;
     setDocumentBase(res.baseUrl);
-    setDirty(false);
+    setDirty(editor.getMarkdown() !== content);
     updateTitle();
-    discardSessionBackup();
-    if (options.silent) {
+    options.savedWithNewEdits = isDirty;
+    if (isDirty) scheduleSessionBackup();
+    else discardSessionBackup();
+    if (isDirty) {
+      setStatus(tr('messages.savedPending'));
+      if (!options.silent) toast(tr('messages.savedPending'));
+    } else if (options.silent) {
       setStatus(tr('status.autoSaved', { name: baseName(currentFilePath) }));
     } else {
       setStatus(tr('status.savedTo', { name: baseName(currentFilePath) }));
       toast(tr('messages.saved'));
     }
     if (!options.silent) void refreshFileTree(currentFilePath);
-    return true;
+    return !isDirty;
   } catch (error) {
     toast(tr('messages.saveFailed', { error: error.message }));
     return false;
-  } finally {
-    saveInFlight = false;
   }
 }
 
 // ============ 图片插入 ============
 async function handleImageInsert(blob, callback) {
+  const sourceEditor = editor;
   if (!blob) { callback(''); return; }
   if (!currentFilePath) {
     toast(tr('messages.saveImageFirst'));
     await saveFile(false);
+    if (editor !== sourceEditor) return;
     if (!currentFilePath) { callback(''); return; }
   }
+  const documentPath = currentFilePath;
   try {
     // blob 转 ArrayBuffer 发给主进程
     const arrayBuffer = await blob.arrayBuffer();
@@ -1148,10 +1197,13 @@ async function handleImageInsert(blob, callback) {
     const hasSupportedName = typeof blob.name === 'string' &&
       /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(blob.name);
     const fileName = hasSupportedName ? blob.name : `image-${Date.now()}.${extension}`;
-    const res = await window.api.saveImageBlob(currentFilePath, fileName, arrayBuffer);
+    if (editor !== sourceEditor) return;
+    const res = await window.api.saveImageBlob(documentPath, fileName, arrayBuffer);
+    if (editor !== sourceEditor) return;
     if (res.error) { toast(res.error); callback(''); return; }
     callback(res.markdownUrl, res.alt);
   } catch (error) {
+    if (editor !== sourceEditor) return;
     toast(tr('messages.saveImageFailed', { error: error.message }));
     callback('');
   }
@@ -1408,14 +1460,7 @@ window.addEventListener('drop', async (e) => {
     toast(tr('messages.unsupportedFile'));
     return;
   }
-  try {
-    const res = await window.api.openPath(filePath);
-    if (res.error) { toast(tr('messages.openFailed', { error: res.error })); return; }
-    if (!(await confirmBeforeReplace())) return;
-    loadContent(res.filePath, res.content, res.baseUrl);
-  } catch (error) {
-    toast(tr('messages.openFailed', { error: error.message }));
-  }
+  await openDocumentFromPath(filePath);
 });
 
 function hasFiles(e) {
@@ -1819,15 +1864,16 @@ async function init() {
     await openSystemDocument(filePath);
   }
 
-  // 崩溃恢复：存在备份时询问用户是否恢复（读取即清除，放弃则不保留）。
+  // 恢复记录持续保留到实际保存或用户放弃，空内容也可能是未保存的删除操作。
   try {
     const backup = await window.api.takeBackup();
-    if (backup && typeof backup.content === 'string' && backup.content !== '') {
+    if (backup && typeof backup.content === 'string') {
       const choice = await window.api.confirmBackupRestore(backup);
       if (choice === 'restore') {
-        loadContent(backup.filePath, backup.content, backup.baseUrl);
-        lastSavedContent = '';
+        loadContent(backup.filePath, backup.content, backup.baseUrl, { restoring: true });
+        lastSavedContent = null;
         setDirty(true);
+        scheduleSessionBackup();
         toast(tr('messages.restored'));
         setStatus(tr('messages.restoredStatus'));
       }

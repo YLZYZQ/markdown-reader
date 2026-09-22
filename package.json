@@ -1,6 +1,6 @@
 {
   "name": "md-reader",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "description": "Markdown阅读器",
   "main": "main.js",
   "author": "",
@@ -24,7 +24,11 @@
     "test:multi-window": "electron test/multi-window-electron.js",
     "test:sidebar": "electron test/sidebar-electron.js",
     "test:help": "electron test/help-electron.js",
-    "test:menu-language": "electron test/menu-language-electron.js"
+    "test:menu-language": "electron test/menu-language-electron.js",
+    "check": "node scripts/check-code.js",
+    "test:all": "node scripts/test-all.js",
+    "test:document-lifecycle": "electron test/document-lifecycle-electron.js",
+    "test:recovery": "electron test/recovery-electron.js"
   },
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",

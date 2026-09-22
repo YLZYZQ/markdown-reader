@@ -1,14 +1,14 @@
+'use strict';
+
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { release, assertNonEmptyArtifact } = require('./windows-release');
 
-const projectDir = path.resolve(__dirname, '..');
-const packageJson = require(path.join(projectDir, 'package.json'));
-const productName = packageJson.build.productName;
+const { projectDir, releaseDir, electronDist } = release;
 const temporaryOutput = fs.mkdtempSync(path.join(os.tmpdir(), 'md-reader-build-'));
-const releaseDir = path.join(projectDir, 'release');
-const artifactBaseName = `${productName}-Setup-${packageJson.version}.exe`;
+const artifactBaseName = release.installerName;
 
 const electronBuilderCli = path.join(
   projectDir,
@@ -16,7 +16,6 @@ const electronBuilderCli = path.join(
   'electron-builder',
   'cli.js',
 );
-const electronDist = path.join(projectDir, 'node_modules', 'electron', 'dist');
 
 const buildArgs = [
   electronBuilderCli,
@@ -51,6 +50,8 @@ try {
     return;
   }
 
+  // Validate this build's output before copying; a stale release must not mask failure.
+  assertNonEmptyArtifact(path.join(temporaryOutput, artifactBaseName));
   fs.mkdirSync(releaseDir, { recursive: true });
   for (const fileName of [artifactBaseName, `${artifactBaseName}.blockmap`]) {
     const sourcePath = path.join(temporaryOutput, fileName);

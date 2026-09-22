@@ -5,6 +5,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, net, shell, scre
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
+const { randomUUID } = require('node:crypto');
 const {
   getDocumentBaseUrl,
   getMarkdownImageUrl,
@@ -16,11 +17,12 @@ const {
 const { listDirectoryTree, listDocumentTree } = require('./lib/file-tree');
 const { parseFileArg } = require('./lib/cli-args');
 const { readDocumentContent } = require('./lib/doc-reader');
+const { writeDocumentAtomically } = require('./lib/atomic-file');
 const { createDocumentWatcher } = require('./lib/doc-watcher');
 const { resolveSaveChord } = require('./lib/save-chord');
-const { loadPreferences, savePreferences, boundsIntersectDisplay } = require('./lib/preferences');
+const { loadPreferences, savePreferences, sanitizePreferences, boundsIntersectDisplay } = require('./lib/preferences');
 const { addRecentEntry, loadRecent, saveRecent } = require('./lib/recent');
-const { clearSessionBackup, readSessionBackup, writeSessionBackup } = require('./lib/session-backup');
+const { clearSessionBackup, readSessionBackups, writeSessionBackup } = require('./lib/session-backup');
 const { fetchLatestRelease, isNewerVersion } = require('./lib/update-checker');
 const { formatMenuLabel, getMenuLabels, MENU_LANGUAGES } = require('./lib/menu-labels');
 const appI18n = require('./lib/app-i18n');
@@ -30,7 +32,6 @@ const authorizedDocumentPaths = new Set();
 
 const windowContexts = new Map();
 let activeWindow = null;
-let backupOwnerContextId = null;
 let helpWindow = null;
 let helpWindowWebContentsId = null;
 let requestedHelpSection = 'guide';
@@ -60,18 +61,27 @@ const recentFilePath = () => path.join(app.getPath('userData'), 'recent.json');
 let recentEntries = loadRecent(recentFilePath());
 let recentSaveTimer = null;
 
+function flushRecent() {
+  if (!recentSaveTimer) return;
+  clearTimeout(recentSaveTimer);
+  recentSaveTimer = null;
+  try { saveRecent(recentFilePath(), recentEntries); }
+  catch (error) { console.warn('保存最近打开记录失败:', error); }
+}
+
+function flushPreferences() {
+  if (!preferencesSaveTimer) return;
+  clearTimeout(preferencesSaveTimer);
+  preferencesSaveTimer = null;
+  try { savePreferences(preferencesFilePath(), preferences); }
+  catch (error) { console.warn('保存偏好失败:', error); }
+}
+
 function recordRecentDocument(filePath) {
   try {
     recentEntries = addRecentEntry(recentEntries, filePath, Date.now());
     if (recentSaveTimer) clearTimeout(recentSaveTimer);
-    recentSaveTimer = setTimeout(() => {
-      recentSaveTimer = null;
-      try {
-        saveRecent(recentFilePath(), recentEntries);
-      } catch (error) {
-        console.warn('保存最近打开记录失败:', error);
-      }
-    }, 300);
+    recentSaveTimer = setTimeout(flushRecent, 300);
   } catch (_) { /* 记录失败不影响打开文档 */ }
   if (menuBuilt) buildMenu();
 }
@@ -86,16 +96,9 @@ function clearRecentDocuments() {
 
 // 局部更新偏好并防抖写盘；主题变化时重建菜单以刷新勾选态。
 function updatePreferences(patch) {
-  preferences = { ...preferences, ...patch };
+  preferences = sanitizePreferences({ ...preferences, ...patch });
   if (preferencesSaveTimer) clearTimeout(preferencesSaveTimer);
-  preferencesSaveTimer = setTimeout(() => {
-    preferencesSaveTimer = null;
-    try {
-      savePreferences(preferencesFilePath(), preferences);
-    } catch (error) {
-      console.warn('保存偏好失败:', error);
-    }
-  }, 300);
+  preferencesSaveTimer = setTimeout(flushPreferences, 300);
   if (menuBuilt && ('theme' in patch || 'menuLanguage' in patch)) buildMenu();
   if ('menuLanguage' in patch) {
     for (const context of windowContexts.values()) {
@@ -248,10 +251,6 @@ function openDocumentWindow(filePath) {
   focusWindow(createWindow(filePath));
 }
 
-function hasDirtyWindow() {
-  return [...windowContexts.values()].some((context) => context.dirty);
-}
-
 function errorResult(error) {
   if (error?.i18nKey) return { error: appI18n.t(preferences.menuLanguage, error.i18nKey, error.i18nValues) };
   return { error: error instanceof Error ? error.message : String(error) };
@@ -279,15 +278,10 @@ function assertAuthorizedTreePath(filePath, context) {
   throw new Error(appI18n.t(preferences.menuLanguage, 'errors.unauthorizedDirectory'));
 }
 
-async function readDocument(filePath, context = null) {
+async function readDocument(filePath) {
   const normalized = normalizeDocumentPath(filePath);
   const { content } = await readDocumentContent(normalized);
   authorizeDocument(normalized);
-  if (context) {
-    context.documentPath = normalized;
-    context.watcher.watch(normalized);
-  }
-  recordRecentDocument(normalized);
   return {
     canceled: false,
     filePath: normalized,
@@ -376,16 +370,18 @@ async function promptForClose(context) {
       window.webContents.send('document:saveBeforeClose');
     } else if (result.response === 1) {
       context.dirty = false;
-      if (!hasDirtyWindow()) clearSessionBackup(app.getPath('userData'));
+      clearSessionBackup(app.getPath('userData'), context.backupId);
       context.allowClose = true;
       window.close();
     }
+  } catch (error) {
+    console.warn('关闭确认失败，保留窗口:', error);
   } finally {
     context.closePromptOpen = false;
   }
 }
 
-function createWindow(startupDocumentPath = null) {
+function createWindow(startupDocumentPath = null, recovery = null) {
   const context = {
     id: null,
     window: null,
@@ -393,7 +389,9 @@ function createWindow(startupDocumentPath = null) {
     allowClose: false,
     closePromptOpen: false,
     rendererReady: false,
-    documentPath: startupDocumentPath,
+    backupId: recovery?.id || randomUUID(),
+    recoverySession: recovery?.session || null,
+    documentPath: recovery?.session?.filePath || startupDocumentPath,
     startupDocumentPath,
     watcher: null
   };
@@ -452,7 +450,6 @@ function createWindow(startupDocumentPath = null) {
   context.window = window;
   context.id = window.webContents.id;
   windowContexts.set(context.id, context);
-  if (backupOwnerContextId === null) backupOwnerContextId = context.id;
   if (!existingWindows.length && savedBounds?.maximized) window.maximize();
   void window.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
@@ -491,7 +488,7 @@ function createWindow(startupDocumentPath = null) {
         updatePreferences({ windowBounds: { ...bounds, maximized: window.isMaximized() } });
       }
     }
-    if (!context.dirty && !hasDirtyWindow()) clearSessionBackup(app.getPath('userData'));
+    if (!context.dirty && !context.recoverySession) clearSessionBackup(app.getPath('userData'), context.backupId);
     if (context.allowClose || !context.dirty) return;
     event.preventDefault();
     void promptForClose(context);
@@ -500,9 +497,6 @@ function createWindow(startupDocumentPath = null) {
     windowContexts.delete(context.id);
     context.watcher.stop();
     if (activeWindow === window) activeWindow = null;
-    if (backupOwnerContextId === context.id) {
-      backupOwnerContextId = [...windowContexts.keys()][0] || null;
-    }
   });
 
   window.webContents.on('will-navigate', (event, url) => {
@@ -610,7 +604,7 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
       targetPath = normalizeDocumentPath(result.filePath);
     }
 
-    await fsp.writeFile(targetPath, content, 'utf8');
+    await writeDocumentAtomically(targetPath, content);
     authorizeDocument(targetPath);
     context.documentPath = targetPath;
     await context.watcher.markOwnWrite(targetPath);
@@ -643,6 +637,18 @@ ipcMain.handle('document:confirmReplace', async (event) => {
   return ['save', 'discard', 'cancel'][result.response] || 'cancel';
 });
 
+// 读取成功不代表用户已经接受切换；渲染器提交内容后才切换监听和最近记录。
+ipcMain.on('document:activate', (event, filePath) => {
+  const context = getWindowContext(event);
+  if (!context) return;
+  try {
+    const normalized = assertAuthorizedDocument(filePath);
+    context.documentPath = normalized;
+    context.watcher.watch(normalized);
+    recordRecentDocument(normalized);
+  } catch (error) { console.warn('激活文档失败:', error); }
+});
+
 ipcMain.on('document:setDirty', (event, dirty) => {
   const context = getWindowContext(event);
   if (context) context.dirty = Boolean(dirty);
@@ -670,9 +676,9 @@ ipcMain.on('prefs:set', (event, patch) => {
 // ============ 崩溃恢复备份与最近打开 ============
 ipcMain.on('backup:write', (event, session) => {
   const context = getWindowContext(event);
-  if (!context || context.id !== backupOwnerContextId) return;
+  if (!context || !context.dirty || context.recoverySession) return;
   try {
-    writeSessionBackup(app.getPath('userData'), session);
+    writeSessionBackup(app.getPath('userData'), session, context.backupId);
   } catch (error) {
     console.warn('写入崩溃恢复备份失败:', error);
   }
@@ -680,23 +686,16 @@ ipcMain.on('backup:write', (event, session) => {
 
 ipcMain.on('backup:clear', (event) => {
   const context = getWindowContext(event);
-  if (context && context.id === backupOwnerContextId) clearSessionBackup(app.getPath('userData'));
+  if (context && !context.recoverySession) clearSessionBackup(app.getPath('userData'), context.backupId);
 });
 
-// 读取并立即清除备份（恢复与否由用户决定，读取后不再保留）。
-ipcMain.handle('backup:take', (event) => {
-  const context = getWindowContext(event);
-  if (!context || context.id !== backupOwnerContextId) return null;
-  try {
-    return readSessionBackup(app.getPath('userData'));
-  } finally {
-    clearSessionBackup(app.getPath('userData'));
-  }
-});
+// 提示恢复时保留磁盘记录，只有成功保存或明确放弃后才删除。
+ipcMain.handle('backup:take', (event) => getWindowContext(event)?.recoverySession || null);
 
-ipcMain.handle('backup:confirmRestore', async (event, info) => {
+ipcMain.handle('backup:confirmRestore', async (event) => {
   const context = getWindowContext(event);
-  if (!context || context.window?.isDestroyed()) return 'discard';
+  if (!context || context.window?.isDestroyed() || !context.recoverySession) return 'discard';
+  const info = context.recoverySession;
   const u = appI18n.getDictionary(preferences.menuLanguage);
   const detailParts = [];
   if (info && Number.isFinite(info.savedAt) && info.savedAt > 0) {
@@ -717,6 +716,12 @@ ipcMain.handle('backup:confirmRestore', async (event, info) => {
     cancelId: 1,
     noLink: true
   });
+  if (context.window.isDestroyed()) return 'discard';
+  if (result.response === 0 && info.filePath) authorizeDocument(normalizeDocumentPath(info.filePath));
+  // 先保护恢复内容，再回复渲染器，避免接管空档被当成干净窗口关闭。
+  if (result.response === 0) context.dirty = true;
+  context.recoverySession = null;
+  if (result.response !== 0) clearSessionBackup(app.getPath('userData'), context.backupId);
   return result.response === 0 ? 'restore' : 'discard';
 });
 
@@ -860,8 +865,7 @@ ipcMain.handle('export:document', async (event, format, markdown, suggestedPath)
 
 ipcMain.on('window:closeAfterSave', (event) => {
   const context = getWindowContext(event);
-  if (!context?.window) return;
-  context.dirty = false;
+  if (!context?.window || context.dirty) return;
   context.allowClose = true;
   context.window.close();
 });
@@ -1202,7 +1206,14 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('com.local.mdreader');
-    createWindow(deferredOpenFilePath || initialStartupDocumentPath);
+    const startupPath = deferredOpenFilePath || initialStartupDocumentPath;
+    const recoveries = readSessionBackups(app.getPath('userData'));
+    const recoveryIndex = startupPath
+      ? recoveries.findIndex((record) => record.session.filePath && pathKey(record.session.filePath) === pathKey(startupPath))
+      : (recoveries.length ? 0 : -1);
+    const initialRecovery = recoveryIndex >= 0 ? recoveries.splice(recoveryIndex, 1)[0] : null;
+    createWindow(startupPath, initialRecovery);
+    for (const recovery of recoveries) createWindow(null, recovery);
     deferredOpenFilePath = null;
     buildMenu();
     scheduleAutomaticUpdateCheck();
@@ -1220,6 +1231,8 @@ if (!app.requestSingleInstanceLock()) {
     });
 
     app.on('will-quit', () => {
+      flushPreferences();
+      flushRecent();
       if (automaticUpdateCheckTimer) {
         clearTimeout(automaticUpdateCheckTimer);
         automaticUpdateCheckTimer = null;

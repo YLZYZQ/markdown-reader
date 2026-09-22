@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
   getPathForFile: (file) => webUtils.getPathForFile(file),
   confirmReplace: () => ipcRenderer.invoke('document:confirmReplace'),
   setDocumentDirty: (dirty) => ipcRenderer.send('document:setDirty', Boolean(dirty)),
+  activateDocument: (filePath) => ipcRenderer.send('document:activate', filePath),
   closeAfterSave: () => ipcRenderer.send('window:closeAfterSave'),
   stopWatchingDocument: () => ipcRenderer.send('document:stopWatching'),
   getSystemTheme: () => ipcRenderer.invoke('theme:getSystem'),

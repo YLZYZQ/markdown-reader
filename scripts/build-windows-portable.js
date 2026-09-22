@@ -1,18 +1,15 @@
+'use strict';
+
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { release, writeExecutableMetadata, assertNonEmptyArtifact } = require('./windows-release');
 
-const projectDir = path.resolve(__dirname, '..');
-const packageJson = require(path.join(projectDir, 'package.json'));
-const productName = packageJson.build.productName;
-const electronDist = path.join(projectDir, 'node_modules', 'electron', 'dist');
-const rceditExecutable = path.join(projectDir, 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe');
-const iconPath = path.join(projectDir, 'build', 'icon.ico');
+const { projectDir, productName, electronDist, releaseDir } = release;
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'md-reader-portable-'));
 const portableRoot = path.join(temporaryRoot, productName);
-const releaseDir = path.join(projectDir, 'release');
-const artifactName = `${productName}-Portable-${packageJson.version}.zip`;
+const artifactName = release.portableName;
 const artifactPath = path.join(releaseDir, artifactName);
 
 const appFiles = [
@@ -45,26 +42,9 @@ try {
 
   fs.renameSync(
     path.join(portableRoot, 'electron.exe'),
-    path.join(portableRoot, `${productName}.exe`),
+    path.join(portableRoot, release.executableName),
   );
-  const executablePath = path.join(portableRoot, `${productName}.exe`);
-  const rceditArgs = [
-    executablePath,
-    '--set-icon', iconPath,
-    '--set-version-string', 'FileDescription', productName,
-    '--set-version-string', 'ProductName', productName,
-    '--set-version-string', 'CompanyName', productName,
-    '--set-version-string', 'InternalName', productName,
-    '--set-version-string', 'OriginalFilename', `${productName}.exe`,
-    '--set-file-version', packageJson.version,
-    '--set-product-version', packageJson.version,
-  ];
-  const rceditResult = spawnSync(rceditExecutable, rceditArgs, { stdio: 'inherit' });
-  if (rceditResult.error) throw rceditResult.error;
-  if (rceditResult.status !== 0) {
-    process.exitCode = rceditResult.status || 1;
-    return;
-  }
+  writeExecutableMetadata(path.join(portableRoot, release.executableName));
   fs.writeFileSync(path.join(portableRoot, 'portable-mode'), '1\n');
   fs.writeFileSync(
     path.join(portableRoot, '使用说明.txt'),
@@ -99,6 +79,7 @@ try {
     return;
   }
 
+  assertNonEmptyArtifact(artifactPath);
   console.log(`Portable package written to ${artifactPath}`);
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });

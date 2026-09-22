@@ -30,13 +30,20 @@
 ## 开发
 
 ```powershell
-npm install
+npm ci
 npm start
 ```
 
 运行测试：
 
 ```powershell
+npm run test:all
+```
+
+单独运行检查或定位问题：
+
+```powershell
+npm run check
 npm test
 npm run notices:check
 npm run test:smoke
@@ -45,7 +52,11 @@ npm run test:reading
 npm run test:search
 npm run test:help
 npm run test:menu-language
+npm run test:document-lifecycle
+npm run test:recovery
 ```
+
+开发规范、状态约束和完整发布流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；版本修复内容见 [CHANGELOG.md](CHANGELOG.md)。
 
 `npm test` 与 `notices:check` 会校验直接依赖、锁定版本与开源清单一致。`test:reading` 验证大纲、阅读进度、字数统计、专注模式、排版偏好与主题切换保留状态，并将浅色、深色、专注模式截图保存到 `release/reading-preview/`；`test:search` 验证长文查找定位、回绕、大小写与替换的事务性；`test:help` 验证帮助页页签、主题、紧凑布局、开源链接并生成对照截图；`test:menu-language` 验证完整中英文界面、多窗口同步、两种编辑模式的内容/选区/滚动/撤销保留、编辑弹窗、帮助标题、文件对话框、奶油白主题和便携版偏好读取；更新检查的版本比较、GitHub 响应解析和失败路径由 `npm test` 覆盖。
 

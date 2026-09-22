@@ -90,12 +90,16 @@ app.whenReady().then(async () => {
         button: 0
       }));
       await wait(200);
+      const anchorTop = heading ? heading.getBoundingClientRect().top : null;
+      // 源码/预览同步还有延迟动画，跳转成功后也不能被旧动画拉回。
+      if (mode === 'markdown') await wait(1100);
       cases.push({
         mode,
         rendered: Boolean(link),
         defaultPrevented: !external,
         anchorDefaultPrevented: !anchorClick,
-        anchorTop: heading ? heading.getBoundingClientRect().top : null
+        anchorTop,
+        settledAnchorTop: heading ? heading.getBoundingClientRect().top : null
       });
     }
     return cases;
@@ -106,6 +110,7 @@ app.whenReady().then(async () => {
     assert.equal(item.defaultPrevented, true, JSON.stringify(item));
     assert.equal(item.anchorDefaultPrevented, true, JSON.stringify(item));
     assert(item.anchorTop !== null && item.anchorTop >= 0 && item.anchorTop < 600, JSON.stringify(item));
+    assert(item.settledAnchorTop !== null && item.settledAnchorTop >= 0 && item.settledAnchorTop < 600, JSON.stringify(item));
   }
   assert.deepEqual(openedUrls, [
     'https://example.com/md-reader-link',
