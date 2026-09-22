@@ -1,6 +1,8 @@
 // 渲染进程：基于 Toast UI Editor 的 Markdown 编辑器
 'use strict';
 
+const i18n = window.AppI18n;
+
 // ============ DOM ============
 const filenameEl = document.getElementById('filename');
 const statusInfoEl = document.getElementById('status-info');
@@ -53,6 +55,7 @@ let autoSaveTimer = null;
 let backupTimer = null;
 let saveInFlight = false;
 let editorFontPrefs = { size: 16, family: '' };
+let currentLanguage = 'zh-CN';
 try {
   sidebarCollapsed = localStorage.getItem('md-reader.sidebarCollapsed') === 'true';
 } catch (error) {
@@ -92,7 +95,7 @@ class MermaidCodeBlockView {
     preview.className = 'mermaid-wysiwyg-preview';
     preview.setAttribute('contenteditable', 'false');
     preview.setAttribute('role', 'img');
-    preview.setAttribute('aria-label', 'Mermaid 图表');
+    preview.setAttribute('aria-label', tr('messages.mermaidDiagram'));
 
     wrapper.append(pre, preview);
     this.dom = wrapper;
@@ -116,7 +119,8 @@ class MermaidCodeBlockView {
       if (bindFunctions) bindFunctions(this.preview);
     } catch (error) {
       if (token !== this.renderToken || !this.preview.isConnected) return;
-      this.preview.textContent = `Mermaid 图表语法错误\n${source}`;
+      this.preview.textContent = `${tr('messages.mermaidError')}\n${source}`;
+      this.preview.dataset.mermaidSource = source;
       this.preview.dataset.mermaidRendered = 'true';
       this.preview.dataset.mermaidError = 'true';
       this.preview.removeAttribute('data-mermaid-rendering');
@@ -213,9 +217,9 @@ function applyTheme(theme, fromSystem = false) {
   document.body.classList.remove('theme-light', 'theme-cream', 'theme-dark');
   document.body.classList.add(`theme-${theme}`);
   themeIconEl.textContent = theme === 'dark' ? '☼' : theme === 'cream' ? '◍' : '◐';
-  const themeName = theme === 'dark' ? '暗色' : theme === 'cream' ? '奶油白' : '亮色';
+  const themeName = theme === 'dark' ? tr('themes.dark') : theme === 'cream' ? tr('themes.cream') : tr('themes.light');
   themeIconEl.parentElement.title =
-    `切换主题 (当前: ${themeName}${fromSystem ? '，跟随系统' : ''})`;
+    tr('themes.current', { name: themeName }) + (fromSystem ? tr('themes.followSystem') : '');
   // 主题样式由根 class 控制：toastui-editor-dark.css 常驻加载，
   // 切换 defaultUI 上的 dark class 即可换肤；保留编辑器实例、选区与撤销历史。
   document.querySelector('#editor .toastui-editor-defaultUI')
@@ -229,15 +233,43 @@ function toggleTheme() {
   applyTheme(next);
 }
 
+function setApplicationLanguage(language) {
+  if (!i18n.LANGUAGES.includes(language) || language === currentLanguage) return;
+  currentLanguage = language;
+  applyLanguageChrome();
+  if (editor) {
+    // Toast UI 3.x caches toolbar labels. Refresh only its UI, keeping both
+    // ProseMirror instances, selections and undo histories intact.
+    editor.i18n.setCode(language);
+    editor.options.language = language;
+    editor.eventEmitter.emit('closePopup');
+    editor.options.toolbarItems.forEach((group, groupIndex) => {
+      group.forEach((item, itemIndex) => {
+        editor.removeToolbarItem(item);
+        editor.insertToolbarItem({ groupIndex, itemIndex }, item);
+      });
+    });
+    updateEditMode(currentEditMode);
+    updateWordCount();
+    updateCaretStatus();
+    if (!findPanelEl.hidden) updateFindCount();
+    readingTools?.refreshNow?.();
+  }
+  hideContextMenu();
+  applyTheme(currentTheme, followsSystemTheme);
+  updateTitle();
+  setStatus(tr('status.languageSwitched'));
+}
+
 async function followSystemTheme() {
   followsSystemTheme = true;
   try {
     const sys = await window.api.getSystemTheme();
     window.api.setPreference({ theme: 'system' });
     applyTheme(sys, true);
-    setStatus(sys === 'dark' ? '已切换为跟随系统（当前暗色）' : '已切换为跟随系统（当前亮色）');
+    setStatus(sys === 'dark' ? tr('status.followSystemDark') : tr('status.followSystemLight'));
   } catch (_) {
-    toast('无法读取系统主题');
+    toast(tr('messages.systemThemeFailed'));
   }
 }
 
@@ -247,10 +279,10 @@ function updateEditMode(mode) {
   // 按钮图标指示“将切换到的模式”：源码 </> ，所见即所得 ✎。
   modeButtonEl.textContent = isMarkdown ? '✎' : '</>';
   modeButtonEl.title = isMarkdown
-    ? '切换到所见即所得模式 (Ctrl+/)'
-    : '切换到源码模式 (Ctrl+/)';
-  modeButtonEl.setAttribute('aria-label', isMarkdown ? '切换到所见即所得模式' : '切换到源码模式');
-  setStatus(isMarkdown ? 'Markdown 源码模式' : '所见即所得模式');
+    ? tr('toolbar.switchToWysiwyg')
+    : tr('toolbar.switchToSource');
+  modeButtonEl.setAttribute('aria-label', isMarkdown ? tr('toolbar.switchToWysiwyg') : tr('toolbar.switchToSource'));
+  setStatus(isMarkdown ? tr('status.sourceMode') : tr('status.wysiwygMode'));
 }
 
 function toggleEditMode() {
@@ -269,7 +301,7 @@ function createEditor(initialValue) {
     previewStyle: 'vertical',
     hideModeSwitch: true,            // 隐藏模式切换 tab
     usageStatistics: false,          // ★ 关闭 GA 统计（离线必须）
-    language: 'zh-CN',               // 中文界面
+    language: currentLanguage,
     theme: currentTheme,
     initialValue: initialValue,
     plugins: [mermaidCodeSyntaxHighlight],  // Mermaid NodeView + 其他代码块 Prism 高亮
@@ -329,6 +361,138 @@ function watchEditorFocusLoss() {
   });
 }
 
+function tr(key, values) {
+  return i18n.t(currentLanguage, key, values);
+}
+
+function applyLanguageChrome() {
+  document.documentElement.lang = currentLanguage;
+  const text = {
+    '#btn-new': tr('toolbar.new'),
+    '#btn-open': tr('toolbar.open'),
+    '#btn-save': tr('toolbar.save'),
+    '.sidebar-title': tr('sidebar.files'),
+    '#tab-files': tr('sidebar.files'),
+    '#tab-outline': tr('sidebar.outline'),
+    '#reading-settings h2': tr('settings.title'),
+    'label[for="font-size"]': tr('settings.fontSize'),
+    'label[for="line-width"]': tr('settings.lineWidth'),
+    'label[for="theme-select"]': tr('settings.appearance'),
+    'label[for="typewriter-toggle"]': `${tr('settings.typewriter')} <small>${tr('settings.keepCursorCentered')}</small>`,
+    '#reading-settings p': tr('settings.hint'),
+    '#btn-replace': tr('find.replace'),
+    '#btn-replace-all': tr('find.replaceAll'),
+    '#status-info': tr('ready'),
+    '#word-count': tr('status.characters', { count: 0 }),
+    '.drop-inner div:last-child': tr('messages.dropFile')
+  };
+  for (const [selector, value] of Object.entries(text)) {
+    const element = document.querySelector(selector);
+    if (element) element.innerHTML = value;
+  }
+  findInputEl.placeholder = tr('find.placeholder');
+  replaceInputEl.placeholder = tr('find.replacePlaceholder');
+
+  const titles = {
+    '#btn-new': tr('toolbar.newTitle'),
+    '#btn-open': tr('toolbar.openTitle'),
+    '#btn-save': tr('toolbar.saveTitle'),
+    '#btn-sidebar': tr('toolbar.sidebarTitle'),
+    '#btn-find': tr('toolbar.findTitle'),
+    '#btn-reading-settings': tr('toolbar.readingSettingsTitle'),
+    '#btn-tree-up': tr('sidebar.upTitle'),
+    '#btn-sidebar-refresh': tr('sidebar.refreshTitle'),
+    '#reading-progress': tr('status.readingTitle'),
+    '#cursor-pos': tr('status.cursorTitle'),
+    '#reading-time': tr('status.readingTimeTitle'),
+    '#zoom-level': tr('status.zoomTitle'),
+    '#btn-find-prev': tr('find.previousTitle'),
+    '#btn-find-next': tr('find.nextTitle'),
+    '#btn-find-close': tr('find.closeTitle'),
+    '#btn-find-expand': tr('find.expandTitle')
+  };
+  for (const [selector, value] of Object.entries(titles)) {
+    const element = document.querySelector(selector);
+    if (element) element.title = value;
+  }
+
+  const aria = {
+    '#btn-sidebar': tr('toolbar.sidebarAria'),
+    '#btn-find': tr('toolbar.findAria'),
+    '#btn-focus': tr('toolbar.focusAria'),
+    '#btn-theme': tr('toolbar.themeAria'),
+    '#btn-reading-settings': tr('toolbar.readingSettingsAria'),
+    '#file-sidebar': tr('sidebar.aria'),
+    '#btn-tree-up': tr('sidebar.upAria'),
+    '#btn-sidebar-refresh': tr('sidebar.refreshAria'),
+    '.sidebar-tabs': tr('sidebar.tabsAria'),
+    '#file-tree': tr('sidebar.treeAria'),
+    '#outline-panel': tr('sidebar.outlineAria'),
+    '#reading-settings': tr('toolbar.readingSettingsAria'),
+    '#find-panel': tr('find.panelAria'),
+    '#find-input': tr('find.aria'),
+    '#replace-input': tr('find.replaceAria'),
+    '#btn-find-prev': tr('find.previousAria'),
+    '#btn-find-next': tr('find.nextAria'),
+    '#btn-find-close': tr('find.closeAria'),
+    '#btn-find-expand': tr('find.expandAria')
+  };
+  for (const [selector, value] of Object.entries(aria)) {
+    const element = document.querySelector(selector);
+    if (element) element.setAttribute('aria-label', value);
+  }
+
+  const fontOptions = document.querySelectorAll('#font-size option');
+  const fontLabels = ['14 px', '16 px', '18 px', '20 px', '22 px'];
+  fontOptions.forEach((option, index) => {
+    if (index === 1) option.textContent = `16 px · ${tr('settings.comfortable')}`;
+    else if (index === 3) option.textContent = `20 px · ${tr('settings.large')}`;
+    else option.textContent = fontLabels[index];
+  });
+  const widthOptions = document.querySelectorAll('#line-width option');
+  widthOptions.forEach((option, index) => {
+    const labels = [
+      `${tr('settings.narrow')} · 640 px`,
+      `${tr('settings.standard')} · 780 px`,
+      `${tr('settings.wide')} · 960 px`
+    ];
+    option.textContent = labels[index];
+  });
+  const themeOptions = document.querySelectorAll('#theme-select option');
+  themeOptions.forEach((option) => {
+    const labels = {
+      system: tr('settings.system'),
+      light: tr('settings.light'),
+      cream: tr('settings.cream'),
+      dark: tr('settings.dark')
+    };
+    option.textContent = labels[option.value];
+  });
+  document.querySelector('.case-option').lastChild.textContent = ` ${tr('find.caseSensitive')}`;
+
+  if (!currentFilePath) filenameEl.textContent = tr('untitled');
+  if (!fileTreeRootPath) {
+    sidebarRootEl.textContent = tr('sidebar.noDocument');
+    sidebarRootEl.title = tr('sidebar.noDocument');
+  }
+  fileTreeEl.querySelectorAll('[data-i18n]').forEach((element) => {
+    element.textContent = tr(element.dataset.i18n, { error: element.dataset.error || '' });
+  });
+  fileTreeEl.querySelectorAll('.tree-directory > summary').forEach((summary) => {
+    summary.title = `${summary.dataset.path}\n${tr('sidebar.enterFolder')}`;
+    summary.querySelector('.tree-chevron').title = tr('sidebar.toggleFolder');
+  });
+  const outlineEmpty = outlineListEl.querySelector('.sidebar-empty');
+  if (outlineEmpty) outlineEmpty.textContent = tr('sidebar.emptyOutline');
+  codeCopyButton.textContent = tr('messages.copy');
+  document.querySelectorAll('.mermaid-wysiwyg-preview').forEach((preview) => {
+    preview.setAttribute('aria-label', tr('messages.mermaidDiagram'));
+    if (preview.dataset.mermaidError === 'true') {
+      preview.textContent = `${tr('messages.mermaidError')}\n${preview.dataset.mermaidSource || ''}`;
+    }
+  });
+}
+
 // WYSIWYG 的链接位于 contenteditable 的 ProseMirror 文档中，浏览器不会按普通
 // 链接导航；预览列也统一走这里，避免同一次点击触发两条导航路径。
 function headingSlug(text) {
@@ -381,7 +545,7 @@ function watchEditorLinks() {
 
     event.preventDefault();
     window.api.openExternal(url.href).then((opened) => {
-      if (!opened) toast('无法打开链接');
+      if (!opened) toast(tr('messages.linkFailed'));
     });
   };
 
@@ -401,9 +565,10 @@ function setDirty(dirty) {
 }
 
 function updateTitle() {
-  const name = currentFilePath ? baseName(currentFilePath) : '未命名.md';
+  const name = currentFilePath ? baseName(currentFilePath) : tr('untitled');
   filenameEl.textContent = name;
-  document.title = `${isDirty ? '• ' : ''}${name} - Markdown阅读器`;
+  const suffix = currentLanguage === 'en-US' ? 'Markdown Reader' : 'Markdown阅读器';
+  document.title = `${isDirty ? '• ' : ''}${name} - ${suffix}`;
 }
 
 function setDocumentBase(baseUrl) {
@@ -430,7 +595,7 @@ function setSidebarCollapsed(collapsed, persist = true) {
   workspaceEl.classList.toggle('sidebar-collapsed', sidebarCollapsed);
   document.getElementById('file-sidebar').inert = sidebarCollapsed || document.body.classList.contains('focus-mode');
   sidebarButtonEl.setAttribute('aria-expanded', String(!sidebarCollapsed));
-  sidebarButtonEl.title = `${sidebarCollapsed ? '显示' : '隐藏'}文件侧边栏 (Ctrl+Shift+E)`;
+  sidebarButtonEl.title = tr('toolbar.sidebarTitle');
   if (persist) {
     try {
       localStorage.setItem('md-reader.sidebarCollapsed', String(sidebarCollapsed));
@@ -440,14 +605,16 @@ function setSidebarCollapsed(collapsed, persist = true) {
   }
 }
 
-function clearFileTree(message = '打开或保存文档后，将显示同目录下的文件。') {
+function clearFileTree(key = 'sidebar.emptyTree', error = '') {
   fileTreeEl.replaceChildren();
   const empty = document.createElement('div');
   empty.className = 'sidebar-empty';
-  empty.textContent = message;
+  empty.dataset.i18n = key;
+  empty.dataset.error = error;
+  empty.textContent = tr(key, { error });
   fileTreeEl.appendChild(empty);
-  sidebarRootEl.textContent = '尚未打开文档';
-  sidebarRootEl.title = '尚未打开文档';
+  sidebarRootEl.textContent = tr('sidebar.noDocument');
+  sidebarRootEl.title = tr('sidebar.noDocument');
   fileTreeRootPath = null;
   fileTreeHomePath = null;
   sidebarUpButtonEl.hidden = true;
@@ -465,11 +632,12 @@ function createTreeEntry(entry, activePath) {
     details.open = entry.children.some((child) => treeEntryContainsPath(child, activePath));
 
     const summary = document.createElement('summary');
-    summary.title = `${entry.path}\n单击进入文件夹；左侧箭头展开或折叠`;
+    summary.dataset.path = entry.path;
+    summary.title = `${entry.path}\n${tr('sidebar.enterFolder')}`;
     const chevron = document.createElement('span');
     chevron.className = 'tree-chevron';
     chevron.textContent = '›';
-    chevron.title = '展开或折叠';
+    chevron.title = tr('sidebar.toggleFolder');
     chevron.setAttribute('aria-hidden', 'true');
     const icon = document.createElement('span');
     icon.className = 'tree-icon';
@@ -528,7 +696,7 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
     const result = await window.api.listDirectoryForDocument(requestPath);
     if (requestId !== fileTreeRequestId) return;
     if (result.error) {
-      clearFileTree('无法读取当前文档目录：' + result.error);
+      clearFileTree('messages.directoryFailed', result.error);
       return;
     }
 
@@ -545,16 +713,18 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
     if (result.entries.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'sidebar-empty';
-      empty.textContent = '当前目录下没有 Markdown 或文本文件。';
+      empty.dataset.i18n = 'sidebar.noFiles';
+      empty.textContent = tr('sidebar.noFiles');
       fileTreeEl.appendChild(empty);
     } else if (result.truncated) {
       const notice = document.createElement('div');
       notice.className = 'sidebar-empty';
-      notice.textContent = '目录内容较多，已限制显示范围。';
+      notice.dataset.i18n = 'sidebar.truncated';
+      notice.textContent = tr('sidebar.truncated');
       fileTreeEl.appendChild(notice);
     }
   } catch (error) {
-    if (requestId === fileTreeRequestId) clearFileTree('无法读取当前文档目录：' + error.message);
+    if (requestId === fileTreeRequestId) clearFileTree('messages.directoryFailed', error.message);
   } finally {
     if (requestId === fileTreeRequestId) sidebarRefreshButtonEl.classList.remove('loading');
   }
@@ -578,13 +748,13 @@ async function openDocumentFromSidebar(filePath) {
   try {
     const result = await window.api.openPath(filePath);
     if (result.error) {
-      toast('打开失败: ' + result.error);
+      toast(tr('messages.openFailed', { error: result.error }));
       void refreshFileTree(currentFilePath, fileTreeRootPath);
       return;
     }
     loadContent(result.filePath, result.content, result.baseUrl);
   } catch (error) {
-    toast('打开失败: ' + error.message);
+    toast(tr('messages.openFailed', { error: error.message }));
   }
 }
 
@@ -620,7 +790,7 @@ function rebuildOutline() {
   if (!outlineEntries.length) {
     const empty = document.createElement('div');
     empty.className = 'sidebar-empty';
-    empty.textContent = '当前文档没有标题。';
+    empty.textContent = tr('sidebar.emptyOutline');
     outlineListEl.appendChild(empty);
     return;
   }
@@ -654,7 +824,7 @@ function jumpToHeading(index) {
   } else {
     const pos = wwHeadingPosition(index);
     if (pos === null) {
-      toast('该标题无法在当前视图定位，请切换到源码模式');
+      toast(tr('messages.headingUnavailable'));
       return;
     }
     editor.setSelection(pos, pos);
@@ -738,7 +908,7 @@ function updateCursorPos(pos) {
   if (!cursorPosEl) return;
   if (!pos) { cursorPosEl.textContent = ''; return; }
   const { line, col } = pos;
-  cursorPosEl.textContent = `第${line}行 第${col}列`;
+  cursorPosEl.textContent = tr('status.lineColumn', { line, column: col });
 }
 
 function updateZoomLevel(level) {
@@ -800,7 +970,7 @@ async function confirmBeforeReplace() {
     if (choice === 'discard') return true;
     if (choice === 'save') return saveFile(false);
   } catch (error) {
-    toast('无法确认未保存更改: ' + error.message);
+    toast(tr('messages.confirmReplaceFailed', { error: error.message }));
   }
   return false;
 }
@@ -829,8 +999,8 @@ async function newDocument() {
   setDirty(false);
   updateTitle();
   updateWordCount();
-  setStatus('已新建空白文档');
-  toast('已新建文档');
+  setStatus(tr('status.newBlank'));
+  toast(tr('messages.newDocument'));
   window.api.stopWatchingDocument();
   discardSessionBackup();
   editor.focus();
@@ -841,11 +1011,11 @@ async function openFile() {
   try {
     const res = await window.api.openFile();
     if (res.canceled) return;
-    if (res.error) { toast('打开失败: ' + res.error); return; }
+    if (res.error) { toast(tr('messages.openFailed', { error: res.error })); return; }
     if (!(await confirmBeforeReplace())) return;
     loadContent(res.filePath, res.content, res.baseUrl);
   } catch (error) {
-    toast('打开失败: ' + error.message);
+    toast(tr('messages.openFailed', { error: error.message }));
   }
 }
 
@@ -855,12 +1025,12 @@ async function openSystemDocument(filePath) {
   try {
     const result = await window.api.openPath(filePath);
     if (result.error) {
-      toast('打开失败: ' + result.error);
+      toast(tr('messages.openFailed', { error: result.error }));
       return;
     }
     loadContent(result.filePath, result.content, result.baseUrl);
   } catch (error) {
-    toast('打开失败: ' + error.message);
+    toast(tr('messages.openFailed', { error: error.message }));
   }
 }
 
@@ -873,10 +1043,10 @@ function loadContent(filePath, content, baseUrl) {
   findPanelEl.hidden = true;
   setDirty(false);
   updateTitle();
-  const displayName = filePath ? baseName(filePath) : '未命名.md';
-  setStatus('已打开: ' + displayName);
+  const displayName = filePath ? baseName(filePath) : tr('untitled');
+  setStatus(tr('status.opened', { name: displayName }));
   if (filePath) {
-    toast('已打开 ' + displayName);
+    toast(tr('messages.opened', { name: displayName }));
     void refreshFileTree(filePath);
   }
 }
@@ -932,7 +1102,7 @@ async function saveFile(saveAs = false, options = {}) {
     const target = saveAs ? null : currentFilePath;
     const res = await window.api.saveFile(target, content);
     if (res.canceled) return false;
-    if (res.error) { toast('保存失败: ' + res.error); return false; }
+    if (res.error) { toast(tr('messages.saveFailed', { error: res.error })); return false; }
     currentFilePath = res.filePath;
     lastSavedContent = content;
     setDocumentBase(res.baseUrl);
@@ -940,15 +1110,15 @@ async function saveFile(saveAs = false, options = {}) {
     updateTitle();
     discardSessionBackup();
     if (options.silent) {
-      setStatus('已自动保存: ' + baseName(currentFilePath));
+      setStatus(tr('status.autoSaved', { name: baseName(currentFilePath) }));
     } else {
-      setStatus('已保存到: ' + baseName(currentFilePath));
-      toast('已保存');
+      setStatus(tr('status.savedTo', { name: baseName(currentFilePath) }));
+      toast(tr('messages.saved'));
     }
     if (!options.silent) void refreshFileTree(currentFilePath);
     return true;
   } catch (error) {
-    toast('保存失败: ' + error.message);
+    toast(tr('messages.saveFailed', { error: error.message }));
     return false;
   } finally {
     saveInFlight = false;
@@ -959,7 +1129,7 @@ async function saveFile(saveAs = false, options = {}) {
 async function handleImageInsert(blob, callback) {
   if (!blob) { callback(''); return; }
   if (!currentFilePath) {
-    toast('请先保存文件，再插入图片');
+    toast(tr('messages.saveImageFirst'));
     await saveFile(false);
     if (!currentFilePath) { callback(''); return; }
   }
@@ -981,7 +1151,7 @@ async function handleImageInsert(blob, callback) {
     if (res.error) { toast(res.error); callback(''); return; }
     callback(res.markdownUrl, res.alt);
   } catch (error) {
-    toast('保存图片失败: ' + error.message);
+    toast(tr('messages.saveImageFailed', { error: error.message }));
     callback('');
   }
 }
@@ -989,13 +1159,13 @@ async function handleImageInsert(blob, callback) {
 // ============ 打印与导出 ============
 async function printDocument() {
   try {
-    setStatus('正在准备打印…');
+    setStatus(tr('status.preparingPrint'));
     const result = await window.api.printDocument(editor.getMarkdown());
-    if (result && result.error) { toast('打印失败: ' + result.error); return; }
-    if (result && result.canceled) { setStatus('已取消打印'); return; }
-    setStatus('已发送到打印机');
+    if (result && result.error) { toast(tr('messages.printFailed', { error: result.error })); return; }
+    if (result && result.canceled) { setStatus(tr('status.printCanceled')); return; }
+    setStatus(tr('status.printed'));
   } catch (error) {
-    toast('打印失败: ' + error.message);
+    toast(tr('messages.printFailed', { error: error.message }));
   }
 }
 
@@ -1006,14 +1176,14 @@ async function exportDocument(format) {
     if (currentFilePath) {
       suggestedPath = currentFilePath.replace(/\.(md|markdown|mdown|txt)$/i, `.${extension}`);
     }
-    setStatus(`正在导出 ${extension.toUpperCase()}…`);
+    setStatus(tr('status.exporting', { format: extension.toUpperCase() }));
     const result = await window.api.exportDocument(format, editor.getMarkdown(), suggestedPath);
-    if (result && result.canceled) { setStatus('已取消导出'); return; }
-    if (result && result.error) { toast('导出失败: ' + result.error); return; }
-    toast('已导出 ' + baseName(result.filePath));
-    setStatus('已导出: ' + result.filePath);
+    if (result && result.canceled) { setStatus(tr('status.exportCanceled')); return; }
+    if (result && result.error) { toast(tr('messages.exportFailed', { error: result.error })); return; }
+    toast(tr('messages.exported', { name: baseName(result.filePath) }));
+    setStatus(tr('status.exported', { path: result.filePath }));
   } catch (error) {
-    toast('导出失败: ' + error.message);
+    toast(tr('messages.exportFailed', { error: error.message }));
   }
 }
 
@@ -1132,7 +1302,9 @@ function updateFindCount() {
   const matches = getFindMatches();
   const count = matches.length;
   if (currentFindMatch >= count) currentFindMatch = count - 1;
-  findCountEl.textContent = currentFindMatch >= 0 ? `${currentFindMatch + 1}/${count}` : `${count} 处`;
+    findCountEl.textContent = currentFindMatch >= 0
+      ? `${currentFindMatch + 1}/${count}`
+      : tr('find.count', { count });
   findCountEl.classList.toggle('no-result', Boolean(findInputEl.value) && count === 0);
   highlightFindMatch(matches[currentFindMatch]);
   return count;
@@ -1165,9 +1337,9 @@ function findInEditor(backwards = false) {
   const matches = getFindMatches();
   const count = matches.length;
   if (count === 0) {
-    findCountEl.textContent = '0 处';
+    findCountEl.textContent = tr('find.noMatch');
     findCountEl.classList.add('no-result');
-    toast('未找到匹配内容');
+    toast(tr('find.notFound'));
     return false;
   }
   currentFindMatch = backwards
@@ -1185,7 +1357,7 @@ function findInEditor(backwards = false) {
 function replaceCurrentMatch() {
   if (!findInputEl.value) return;
   const matches = getFindMatches();
-  if (matches.length === 0) { toast('未找到匹配内容'); return; }
+  if (matches.length === 0) { toast(tr('find.notFound')); return; }
   if (currentFindMatch < 0 || currentFindMatch >= matches.length) currentFindMatch = 0;
   const replacedIndex = currentFindMatch;
   const match = matches[currentFindMatch];
@@ -1200,7 +1372,7 @@ function replaceAllMatches() {
   if (!getFindExpression()) return;
   const matches = getFindMatches();
   if (matches.length === 0) {
-    toast('未找到匹配内容');
+    toast(tr('find.notFound'));
     return;
   }
   const view = getSearchView();
@@ -1210,7 +1382,7 @@ function replaceAllMatches() {
   view.dispatch(transaction);
   currentFindMatch = -1;
   updateFindCount();
-  toast(`已替换 ${matches.length} 处`);
+    toast(tr('find.replaced', { count: matches.length }));
 }
 
 // ============ 拖拽 ============
@@ -1232,16 +1404,16 @@ window.addEventListener('drop', async (e) => {
   const filePath = window.api.getPathForFile(file);
   if (!filePath) return;
   if (!/\.(md|markdown|mdown|txt)$/i.test(filePath)) {
-    toast('仅支持 Markdown 文件 (.md/.markdown/.mdown/.txt)');
+    toast(tr('messages.unsupportedFile'));
     return;
   }
   try {
     const res = await window.api.openPath(filePath);
-    if (res.error) { toast('打开失败: ' + res.error); return; }
+    if (res.error) { toast(tr('messages.openFailed', { error: res.error })); return; }
     if (!(await confirmBeforeReplace())) return;
     loadContent(res.filePath, res.content, res.baseUrl);
   } catch (error) {
-    toast('打开失败: ' + error.message);
+    toast(tr('messages.openFailed', { error: error.message }));
   }
 });
 
@@ -1325,6 +1497,7 @@ function handleEditorCommand(name, payload = {}) {
           applyTheme(payload.theme);
         }
         break;
+      case 'setLanguage': setApplicationLanguage(String(payload.language || 'zh-CN')); break;
       case 'print': void printDocument(); break;
       case 'export': void exportDocument(payload.format === 'html' ? 'html' : 'pdf'); break;
       case 'autoSaveChanged': setAutoSaveEnabled(Boolean(payload.enabled)); break;
@@ -1332,14 +1505,14 @@ function handleEditorCommand(name, payload = {}) {
         editorFontPrefs.size = Math.min(28, Math.max(12, Number(payload.size) || 16));
         window.api.setPreference({ editorFontSize: editorFontPrefs.size });
         applyEditorFontPrefs();
-        setStatus(`正文字号：${editorFontPrefs.size}px`);
+        setStatus(tr('status.fontSize', { size: editorFontPrefs.size }));
         break;
       case 'setFontFamily':
         if (Object.prototype.hasOwnProperty.call(FONT_FAMILY_VALUES, payload.family)) {
           editorFontPrefs.family = payload.family;
           window.api.setPreference({ editorFontFamily: editorFontPrefs.family });
           applyEditorFontPrefs();
-          setStatus('正文字体已更新');
+          setStatus(tr('status.fontFamilyUpdated'));
         }
         break;
       case 'popup': openToolbarPopup(payload.name); break;
@@ -1348,7 +1521,7 @@ function handleEditorCommand(name, payload = {}) {
     }
   } catch (error) {
     console.warn('编辑命令失败:', name, error);
-    toast('该编辑操作当前不可用');
+    toast(tr('messages.commandUnavailable'));
   }
 }
 
@@ -1364,65 +1537,67 @@ window.api.onSaveBeforeClose(async () => {
 });
 window.api.onZoomLevelChanged((level) => updateZoomLevel(level));
 window.api.onFileExternalChanged(() => {
-  toast('文件已在磁盘上被外部修改');
-  setStatus('文件已被外部程序修改；如需最新内容请从侧边栏重新打开');
+  toast(tr('messages.externalModified'));
+  setStatus(tr('messages.externalModifiedStatus'));
 });
 
 // ============ 右键上下文菜单（成熟商业阅读器风格）============
-const MENU_ITEMS = [
-  { label: '撤销', hotkey: 'Ctrl+Z', action: () => editor.exec('undo') },
-  { label: '重做', hotkey: 'Ctrl+Shift+Z', action: () => editor.exec('redo') },
+function contextMenuItems() {
+  return [
+  { label: tr('context.undo'), hotkey: 'Ctrl+Z', action: () => editor.exec('undo') },
+  { label: tr('context.redo'), hotkey: 'Ctrl+Shift+Z', action: () => editor.exec('redo') },
   { divider: true },
-  { label: '剪切', hotkey: 'Ctrl+X', action: () => document.execCommand('cut') },
-  { label: '复制', hotkey: 'Ctrl+C', action: () => document.execCommand('copy') },
-  { label: '粘贴', hotkey: 'Ctrl+V', action: () => document.execCommand('paste') },
-  { label: '全选', hotkey: 'Ctrl+A', action: () => editor.exec('selectAll') },
+  { label: tr('context.cut'), hotkey: 'Ctrl+X', action: () => document.execCommand('cut') },
+  { label: tr('context.copy'), hotkey: 'Ctrl+C', action: () => document.execCommand('copy') },
+  { label: tr('context.paste'), hotkey: 'Ctrl+V', action: () => document.execCommand('paste') },
+  { label: tr('context.selectAll'), hotkey: 'Ctrl+A', action: () => editor.exec('selectAll') },
   { divider: true },
   {
-    label: '段落', submenu: [
-      { label: '正文', hotkey: 'Ctrl+0', action: () => editor.exec('heading', { level: 0 }) },
+    label: tr('context.paragraph'), submenu: [
+      { label: tr('context.text'), hotkey: 'Ctrl+0', action: () => editor.exec('heading', { level: 0 }) },
       ...Array.from({ length: 6 }, (_, index) => ({
-        label: `${index + 1} 级标题`,
+        label: tr('context.headingLevel', { level: index + 1 }),
         hotkey: `Ctrl+${index + 1}`,
         action: () => editor.exec('heading', { level: index + 1 })
       })),
       { divider: true },
-      { label: '引用块', action: () => editor.exec('blockQuote') },
-      { label: '无序列表', action: () => editor.exec('bulletList') },
-      { label: '有序列表', action: () => editor.exec('orderedList') },
-      { label: '任务列表', action: () => editor.exec('taskList') },
-      { label: '代码块', action: () => editor.exec('codeBlock') },
+      { label: tr('context.blockQuote'), action: () => editor.exec('blockQuote') },
+      { label: tr('context.bulletList'), action: () => editor.exec('bulletList') },
+      { label: tr('context.orderedList'), action: () => editor.exec('orderedList') },
+      { label: tr('context.taskList'), action: () => editor.exec('taskList') },
+      { label: tr('context.codeBlock'), action: () => editor.exec('codeBlock') },
     ]
   },
   {
-    label: '格式', submenu: [
-      { label: '加粗', hotkey: 'Ctrl+B', action: () => editor.exec('bold') },
-      { label: '斜体', hotkey: 'Ctrl+I', action: () => editor.exec('italic') },
-      { label: '删除线', action: () => editor.exec('strike') },
-      { label: '行内代码', action: () => editor.exec('code') },
+    label: tr('context.format'), submenu: [
+      { label: tr('context.bold'), hotkey: 'Ctrl+B', action: () => editor.exec('bold') },
+      { label: tr('context.italic'), hotkey: 'Ctrl+I', action: () => editor.exec('italic') },
+      { label: tr('context.strike'), action: () => editor.exec('strike') },
+      { label: tr('context.inlineCode'), action: () => editor.exec('code') },
       { divider: true },
-      { label: '插入链接…', hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
+      { label: tr('context.insertLink'), hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
       { divider: true },
-      { label: '增加缩进', action: () => editor.exec('indent') },
-      { label: '减少缩进', action: () => editor.exec('outdent') },
+      { label: tr('context.indent'), action: () => editor.exec('indent') },
+      { label: tr('context.outdent'), action: () => editor.exec('outdent') },
     ]
   },
   {
-    label: '插入', submenu: [
-      { label: '图片…', action: () => openToolbarPopup('image') },
-      { label: '链接…', hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
-      { label: '表格', action: () => openToolbarPopup('table') },
-      { label: '代码块', action: () => editor.exec('codeBlock') },
-      { label: '水平分割线', action: () => editor.exec('hr') },
-      { label: '日期时间', action: () => editor.insertText('\n' + nowString() + '\n') },
+    label: tr('context.insert'), submenu: [
+      { label: tr('context.image'), action: () => openToolbarPopup('image') },
+      { label: tr('context.link'), hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
+      { label: tr('context.table'), action: () => openToolbarPopup('table') },
+      { label: tr('context.codeBlock'), action: () => editor.exec('codeBlock') },
+      { label: tr('context.horizontalRule'), action: () => editor.exec('hr') },
+      { label: tr('context.dateTime'), action: () => editor.insertText('\n' + nowString() + '\n') },
     ]
   },
   { divider: true },
-  { label: '查找…', hotkey: 'Ctrl+F', action: () => showFindPanel(false) },
-  { label: '替换…', hotkey: 'Ctrl+H', action: () => showFindPanel(true) },
-  { label: '切换源码模式', hotkey: 'Ctrl+/', action: () => toggleEditMode() },
-  { label: '切换主题', hotkey: 'Ctrl+Shift+T', action: () => toggleTheme() },
-];
+  { label: tr('context.find'), hotkey: 'Ctrl+F', action: () => showFindPanel(false) },
+  { label: tr('context.replace'), hotkey: 'Ctrl+H', action: () => showFindPanel(true) },
+  { label: tr('context.switchSource'), hotkey: 'Ctrl+/', action: () => toggleEditMode() },
+  { label: tr('context.switchTheme'), hotkey: 'Ctrl+Shift+T', action: () => toggleTheme() },
+  ];
+}
 
 function nowString() {
   const d = new Date();
@@ -1438,7 +1613,7 @@ function openToolbarPopup(name) {
     if (button && !button.disabled) {
       button.click();
     } else {
-      toast('当前无法执行该插入操作');
+      toast(tr('messages.insertUnavailable'));
     }
   }, 0);
 }
@@ -1514,7 +1689,7 @@ function showSubmenu(parentRow, items) {
 
 function showContextMenu(x, y) {
   hideContextMenu();
-  contextMenuEl = buildMenu(MENU_ITEMS, false);
+  contextMenuEl = buildMenu(contextMenuItems(), false);
   document.body.appendChild(contextMenuEl);
   contextMenuEl.style.visibility = 'hidden';
   contextMenuEl.style.left = x + 'px';
@@ -1566,6 +1741,10 @@ async function init() {
       followsSystemTheme = true;
     }
   } catch (e) { /* 默认 light */ }
+  currentLanguage = storedPrefs && i18n.LANGUAGES.includes(storedPrefs.menuLanguage)
+    ? storedPrefs.menuLanguage
+    : 'zh-CN';
+  applyLanguageChrome();
   setAutoSaveEnabled(Boolean(storedPrefs && storedPrefs.autoSave));
   editorFontPrefs = {
     size: (storedPrefs && Number(storedPrefs.editorFontSize)) || 16,
@@ -1586,12 +1765,12 @@ async function init() {
     onSetLineWidth: (width) => {
       document.documentElement.style.setProperty('--reading-width', `${width}px`);
       window.api.setPreference({ readingLineWidth: width });
-      setStatus(`正文宽度：${width} px`);
+      setStatus(tr('status.lineWidth', { width }));
     },
     onSetTypewriter: (enabled) => {
       document.body.classList.toggle('typewriter-mode', enabled);
       window.api.setPreference({ typewriterMode: enabled });
-      setStatus(enabled ? '打字机模式已开启' : '打字机模式已关闭');
+      setStatus(enabled ? tr('status.typewriterOn') : tr('status.typewriterOff'));
     },
     onSetTheme: (preference) => {
       if (preference === 'system') void followSystemTheme();
@@ -1616,7 +1795,7 @@ async function init() {
   updateEditMode(currentEditMode);
   updateWordCount();
   updateTitle();
-  setStatus('已新建空白文档');
+  setStatus(tr('status.newBlank'));
   setupContextMenu();
   watchEditorFocusLoss();
   watchEditorLinks();
@@ -1625,11 +1804,11 @@ async function init() {
   try {
     const startupDocument = await window.api.takeStartupDocument();
     if (startupDocument && !startupDocument.canceled) {
-      if (startupDocument.error) toast('打开启动文档失败: ' + startupDocument.error);
+      if (startupDocument.error) toast(tr('messages.openStartupFailed', { error: startupDocument.error }));
       else loadContent(startupDocument.filePath, startupDocument.content, startupDocument.baseUrl);
     }
   } catch (error) {
-    toast('读取启动文档失败: ' + error.message);
+    toast(tr('messages.readStartFailed', { error: error.message }));
   }
 
   window.api.notifyRendererReady();
@@ -1648,8 +1827,8 @@ async function init() {
         loadContent(backup.filePath, backup.content, backup.baseUrl);
         lastSavedContent = '';
         setDirty(true);
-        toast('已恢复上次未保存的内容');
-        setStatus('已恢复上次未保存的内容（Ctrl+S 保存）');
+        toast(tr('messages.restored'));
+        setStatus(tr('messages.restoredStatus'));
       }
     }
   } catch (_) { /* 恢复流程失败不影响正常使用 */ }
@@ -1678,7 +1857,7 @@ function applyEditorFontPrefs() {
 const codeCopyButton = document.createElement('button');
 codeCopyButton.type = 'button';
 codeCopyButton.className = 'code-block-copy-btn';
-codeCopyButton.textContent = '复制';
+codeCopyButton.textContent = tr('messages.copy');
 let codeCopyTargetPre = null;
 
 function isCopyableCodePre(pre) {
@@ -1731,8 +1910,8 @@ function setupCodeCopyButtons() {
     const code = pre.querySelector('code') || pre;
     const text = (code.textContent || '').replace(/\n$/, '');
     copyTextToClipboard(text).then((ok) => {
-      codeCopyButton.textContent = ok ? '已复制' : '复制失败';
-      setTimeout(() => { codeCopyButton.textContent = '复制'; }, 1200);
+      codeCopyButton.textContent = ok ? tr('messages.copied') : tr('messages.copyFailed');
+      setTimeout(() => { codeCopyButton.textContent = tr('messages.copy'); }, 1200);
     });
   });
   document.addEventListener('mouseover', (event) => {

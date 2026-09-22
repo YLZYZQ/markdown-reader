@@ -21,6 +21,7 @@
   <link rel="stylesheet" href="tui-editor/toastui-editor-plugin-code-syntax-highlight.css" />
   <link rel="stylesheet" href="tui-editor/prism.css" />
   <script src="tui-editor/editor-bundle.js"></script>
+  <script src="../lib/app-i18n.js"></script>
   <script src="../lib/outline.js"></script>
   <script src="../lib/mermaid-html-renderer.js"></script>
   <link rel="stylesheet" href="style.css" />
@@ -64,7 +65,7 @@
         <button id="tab-outline" class="sidebar-tab" type="button" role="tab" aria-selected="false">大纲</button>
       </nav>
       <div id="file-tree" class="file-tree" role="tabpanel" aria-label="文件列表">
-        <div class="sidebar-empty">打开或保存文档后，将显示同目录下的文件。</div>
+        <div class="sidebar-empty" data-i18n="sidebar.emptyTree">打开或保存文档后，将显示同目录下的文件。</div>
       </div>
       <div id="outline-panel" class="outline-panel" role="tabpanel" aria-label="文档大纲" hidden>
         <div id="outline-list" class="outline-list">

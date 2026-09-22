@@ -23,6 +23,7 @@ const { addRecentEntry, loadRecent, saveRecent } = require('./lib/recent');
 const { clearSessionBackup, readSessionBackup, writeSessionBackup } = require('./lib/session-backup');
 const { fetchLatestRelease, isNewerVersion } = require('./lib/update-checker');
 const { formatMenuLabel, getMenuLabels, MENU_LANGUAGES } = require('./lib/menu-labels');
+const appI18n = require('./lib/app-i18n');
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const authorizedDocumentPaths = new Set();
@@ -38,6 +39,15 @@ let updateCheckInFlight = false;
 const AUTOMATIC_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const initialStartupDocumentPath = parseFileArg(process.argv);
 let deferredOpenFilePath = null;
+
+// 先确定数据目录，再读取语言、主题和最近文档；便携版不能读取安装版偏好。
+const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR ||
+  (fs.existsSync(path.join(path.dirname(process.execPath), 'portable-mode'))
+    ? path.dirname(process.execPath)
+    : null);
+if (portableExecutableDir) {
+  app.setPath('userData', path.join(portableExecutableDir, 'data'));
+}
 
 // 用户偏好（主题/窗口/缩放），userData/preferences.json 单一事实源。
 const preferencesFilePath = () => path.join(app.getPath('userData'), 'preferences.json');
@@ -87,16 +97,13 @@ function updatePreferences(patch) {
     }
   }, 300);
   if (menuBuilt && ('theme' in patch || 'menuLanguage' in patch)) buildMenu();
+  if ('menuLanguage' in patch) {
+    for (const context of windowContexts.values()) {
+      context.window?.webContents.send('editor:command', 'setLanguage', { language: preferences.menuLanguage });
+    }
+    sendHelpState();
+  }
   if ('theme' in patch) sendHelpState();
-}
-
-const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR ||
-  (fs.existsSync(path.join(path.dirname(process.execPath), 'portable-mode'))
-    ? path.dirname(process.execPath)
-    : null);
-
-if (portableExecutableDir) {
-  app.setPath('userData', path.join(portableExecutableDir, 'data'));
 }
 
 function getWindowContext(event) {
@@ -115,7 +122,8 @@ function helpState() {
   return {
     version: app.getVersion(),
     themePreference: preferences.theme,
-    systemTheme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+    systemTheme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light',
+    menuLanguage: preferences.menuLanguage
   };
 }
 
@@ -245,6 +253,7 @@ function hasDirtyWindow() {
 }
 
 function errorResult(error) {
+  if (error?.i18nKey) return { error: appI18n.t(preferences.menuLanguage, error.i18nKey, error.i18nValues) };
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
@@ -255,7 +264,7 @@ function authorizeDocument(filePath) {
 function assertAuthorizedDocument(filePath) {
   const normalized = normalizeDocumentPath(filePath);
   if (!authorizedDocumentPaths.has(pathKey(normalized))) {
-    throw new Error('未授权的文档路径');
+    throw new Error(appI18n.t(preferences.menuLanguage, 'errors.unauthorizedDocument'));
   }
   return normalized;
 }
@@ -267,7 +276,7 @@ function assertAuthorizedTreePath(filePath, context) {
   if (rootKey && (normalizedKey === rootKey || normalizedKey.startsWith(`${rootKey}${path.sep}`))) {
     return normalized;
   }
-  throw new Error('未授权的目录路径');
+  throw new Error(appI18n.t(preferences.menuLanguage, 'errors.unauthorizedDirectory'));
 }
 
 async function readDocument(filePath, context = null) {
@@ -304,9 +313,9 @@ async function getUniqueImagePath(imageDir, fileName) {
 async function saveImageBuffer(mdFilePath, fileName, arrayBuffer) {
   const documentPath = assertAuthorizedDocument(mdFilePath);
   const safeName = sanitizeImageFileName(fileName);
-  if (!(arrayBuffer instanceof ArrayBuffer)) throw new TypeError('图片数据无效');
-  if (arrayBuffer.byteLength === 0) throw new TypeError('图片数据为空');
-  if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) throw new TypeError('图片不能超过 25 MB');
+  if (!(arrayBuffer instanceof ArrayBuffer)) throw new TypeError(appI18n.t(preferences.menuLanguage, 'errors.invalidImage'));
+  if (arrayBuffer.byteLength === 0) throw new TypeError(appI18n.t(preferences.menuLanguage, 'errors.emptyImage'));
+  if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) throw new TypeError(appI18n.t(preferences.menuLanguage, 'errors.imageTooLarge'));
 
   const imageDir = path.join(path.dirname(documentPath), 'images');
   await fsp.mkdir(imageDir, { recursive: true });
@@ -349,13 +358,14 @@ async function promptForClose(context) {
   const window = context.window;
   if (!window || window.isDestroyed() || context.closePromptOpen) return;
   context.closePromptOpen = true;
+  const u = appI18n.getDictionary(preferences.menuLanguage);
   try {
     const result = await dialog.showMessageBox(window, {
       type: 'warning',
-      title: '保存更改',
-      message: '当前文档有尚未保存的更改。',
-      detail: '关闭窗口前是否保存？',
-      buttons: ['保存', '不保存', '取消'],
+      title: u.dialogs.saveChanges,
+      message: u.dialogs.unsavedMessage,
+      detail: u.dialogs.closeDetail,
+      buttons: [u.dialogs.save, u.dialogs.dontSave, u.dialogs.cancel],
       defaultId: 0,
       cancelId: 2,
       noLink: true
@@ -428,7 +438,7 @@ function createWindow(startupDocumentPath = null) {
     y,
     backgroundColor: themeBackgroundColor(resolvedTheme()),
     show: false,
-    title: '未命名.md - Markdown阅读器',
+    title: `${appI18n.t(preferences.menuLanguage, 'untitled')} - ${preferences.menuLanguage === 'en-US' ? 'Markdown Reader' : 'Markdown阅读器'}`,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -507,12 +517,13 @@ function createWindow(startupDocumentPath = null) {
 
 ipcMain.handle('file:open', async (event) => {
   const context = getWindowContext(event);
-  if (!context) return errorResult('无效的调用来源');
+  const u = appI18n.getDictionary(preferences.menuLanguage);
+  if (!context) return errorResult(u.errors.invalidSource);
   const result = await dialog.showOpenDialog(context.window, {
-    title: '打开 Markdown 文件',
+    title: u.dialogs.openFile,
     filters: [
-      { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'txt'] },
-      { name: '所有文件', extensions: ['*'] }
+      { name: u.dialogs.markdown, extensions: ['md', 'markdown', 'mdown', 'txt'] },
+      { name: u.dialogs.allFiles, extensions: ['*'] }
     ],
     properties: ['openFile']
   });
@@ -531,7 +542,7 @@ ipcMain.handle('file:open', async (event) => {
 
 ipcMain.handle('file:openPath', async (event, filePath) => {
   const context = getWindowContext(event);
-  if (!context) return errorResult('无效的调用来源');
+  if (!context) return errorResult(appI18n.getDictionary(preferences.menuLanguage).errors.invalidSource);
   const existingWindow = findWindowByDocumentPath(filePath);
   if (existingWindow && existingWindow !== context.window) {
     focusWindow(existingWindow);
@@ -546,7 +557,7 @@ ipcMain.handle('file:openPath', async (event, filePath) => {
 
 ipcMain.handle('startup:takeDocument', async (event) => {
   const context = getWindowContext(event);
-  if (!context) return errorResult('无效的调用来源');
+  if (!context) return errorResult(appI18n.getDictionary(preferences.menuLanguage).errors.invalidSource);
   const filePath = context.startupDocumentPath;
   context.startupDocumentPath = null;
   context.documentPath = null;
@@ -565,7 +576,7 @@ ipcMain.on('app:rendererReady', (event) => {
 
 ipcMain.handle('directory:listForDocument', async (event, filePath) => {
   const context = getWindowContext(event);
-  if (!context) return errorResult('无效的调用来源');
+  if (!context) return errorResult(appI18n.getDictionary(preferences.menuLanguage).errors.invalidSource);
   try {
     const treePath = assertAuthorizedTreePath(filePath, context);
     const stats = await fsp.stat(treePath);
@@ -577,8 +588,9 @@ ipcMain.handle('directory:listForDocument', async (event, filePath) => {
 
 ipcMain.handle('file:save', async (event, filePath, content) => {
   const context = getWindowContext(event);
-  if (!context) return errorResult('无效的调用来源');
-  if (typeof content !== 'string') return errorResult('文档内容无效');
+  const u = appI18n.getDictionary(preferences.menuLanguage);
+  if (!context) return errorResult(u.errors.invalidSource);
+  if (typeof content !== 'string') return errorResult(u.errors.invalidContent);
 
   let targetPath;
   try {
@@ -586,11 +598,11 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
       targetPath = assertAuthorizedDocument(filePath);
     } else {
       const result = await dialog.showSaveDialog(context.window, {
-        title: '保存 Markdown 文件',
-        defaultPath: '未命名.md',
+        title: u.dialogs.saveFile,
+        defaultPath: appI18n.t(preferences.menuLanguage, 'untitled'),
         filters: [
-          { name: 'Markdown', extensions: ['md'] },
-          { name: '文本', extensions: ['txt'] }
+          { name: u.dialogs.markdown, extensions: ['md'] },
+          { name: u.dialogs.text, extensions: ['txt'] }
         ]
       });
       if (result.canceled || !result.filePath) return { canceled: true };
@@ -616,12 +628,13 @@ ipcMain.handle('file:save', async (event, filePath, content) => {
 ipcMain.handle('document:confirmReplace', async (event) => {
   const context = getWindowContext(event);
   if (!context) return 'cancel';
+  const u = appI18n.getDictionary(preferences.menuLanguage);
   const result = await dialog.showMessageBox(context.window, {
     type: 'warning',
-    title: '保存更改',
-    message: '当前文档有尚未保存的更改。',
-    detail: '打开另一份文档前是否保存？',
-    buttons: ['保存', '不保存', '取消'],
+    title: u.dialogs.saveChanges,
+    message: u.dialogs.unsavedMessage,
+    detail: u.dialogs.replaceDetail,
+    buttons: [u.dialogs.save, u.dialogs.dontSave, u.dialogs.cancel],
     defaultId: 0,
     cancelId: 2,
     noLink: true
@@ -683,17 +696,22 @@ ipcMain.handle('backup:take', (event) => {
 ipcMain.handle('backup:confirmRestore', async (event, info) => {
   const context = getWindowContext(event);
   if (!context || context.window?.isDestroyed()) return 'discard';
+  const u = appI18n.getDictionary(preferences.menuLanguage);
   const detailParts = [];
   if (info && Number.isFinite(info.savedAt) && info.savedAt > 0) {
-    detailParts.push(`最后修改：${new Date(info.savedAt).toLocaleString('zh-CN')}`);
+    detailParts.push(appI18n.format(u.dialogs.lastModified, {
+      time: new Date(info.savedAt).toLocaleString(preferences.menuLanguage)
+    }));
   }
-  detailParts.push(info && info.filePath ? `文档：${info.filePath}` : '文档：未命名（未保存过）');
+  detailParts.push(info && info.filePath
+    ? appI18n.format(u.dialogs.document, { path: info.filePath })
+    : u.dialogs.untitledDocument);
   const result = await dialog.showMessageBox(context.window, {
     type: 'warning',
-    title: '恢复未保存内容',
-    message: '检测到上次未保存的内容',
-    detail: detailParts.join('\n') + '\n\n是否恢复到编辑器？',
-    buttons: ['恢复', '放弃'],
+    title: u.dialogs.restoreTitle,
+    message: u.dialogs.restoreMessage,
+    detail: detailParts.join('\n') + '\n\n' + u.dialogs.restorePrompt,
+    buttons: [u.dialogs.restore, u.dialogs.discard],
     defaultId: 0,
     cancelId: 1,
     noLink: true
@@ -734,7 +752,7 @@ async function runPrintPipeline(markdown, action) {
       if (ready) break;
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    if (!ready) throw new Error('打印内容渲染超时');
+    if (!ready) throw new Error(appI18n.t(preferences.menuLanguage, 'errors.printTimeout'));
 
     if (action === 'pdf') {
       const pdfBuffer = await printWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
@@ -748,12 +766,12 @@ async function runPrintPipeline(markdown, action) {
       const printResult = await new Promise((resolve, reject) => {
         printWindow.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
           if (success || failureReason === 'cancelled') resolve({ canceled: failureReason === 'cancelled' });
-          else reject(new Error(failureReason || '打印失败'));
+          else reject(new Error(failureReason || appI18n.t(preferences.menuLanguage, 'errors.printFailed')));
         });
       });
       return { action: 'print', canceled: Boolean(printResult.canceled) };
     }
-    throw new Error('未知的打印操作');
+    throw new Error(appI18n.t(preferences.menuLanguage, 'errors.unknownPrintAction'));
   } finally {
     if (printWindow && !printWindow.isDestroyed()) printWindow.destroy();
     printWindow = null;
@@ -795,8 +813,9 @@ function buildExportHtmlDocument(filePath, body) {
 }
 
 ipcMain.handle('print:document', async (event, markdown) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
-  if (typeof markdown !== 'string') return errorResult('文档内容无效');
+  const u = appI18n.getDictionary(preferences.menuLanguage);
+  if (!isCurrentRenderer(event)) return errorResult(u.errors.invalidSource);
+  if (typeof markdown !== 'string') return errorResult(u.errors.invalidContent);
   try {
     const result = await runPrintPipeline(markdown, 'print');
     return { canceled: Boolean(result.canceled) };
@@ -807,19 +826,20 @@ ipcMain.handle('print:document', async (event, markdown) => {
 
 ipcMain.handle('export:document', async (event, format, markdown, suggestedPath) => {
   const context = getWindowContext(event);
-  if (!context) return errorResult('无效的调用来源');
-  if (typeof markdown !== 'string') return errorResult('文档内容无效');
-  if (format !== 'pdf' && format !== 'html') return errorResult('不支持的导出格式');
+  const u = appI18n.getDictionary(preferences.menuLanguage);
+  if (!context) return errorResult(u.errors.invalidSource);
+  if (typeof markdown !== 'string') return errorResult(u.errors.invalidContent);
+  if (format !== 'pdf' && format !== 'html') return errorResult(u.errors.unsupportedFormat);
   try {
     const defaultPath = typeof suggestedPath === 'string' && suggestedPath.trim()
       ? suggestedPath.trim()
-      : `未命名.${format}`;
+      : `${appI18n.t(preferences.menuLanguage, 'untitled').replace(/\.(md|txt)$/, '')}.${format}`;
     const dialogResult = await dialog.showSaveDialog(context.window, {
-      title: format === 'pdf' ? '导出 PDF' : '导出 HTML',
+      title: format === 'pdf' ? u.dialogs.exportPdf : u.dialogs.exportHtml,
       defaultPath,
       filters: format === 'pdf'
-        ? [{ name: 'PDF 文档', extensions: ['pdf'] }]
-        : [{ name: 'HTML 文档', extensions: ['html'] }]
+        ? [{ name: u.dialogs.pdfDocument, extensions: ['pdf'] }]
+        : [{ name: u.dialogs.htmlDocument, extensions: ['html'] }]
     });
     if (dialogResult.canceled || !dialogResult.filePath) return { canceled: true };
     const targetPath = path.resolve(dialogResult.filePath);
@@ -861,7 +881,7 @@ ipcMain.handle('shell:openExternal', async (event, url) => {
 });
 
 ipcMain.handle('image:saveBlob', async (event, mdFilePath, fileName, arrayBuffer) => {
-  if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
+  if (!isCurrentRenderer(event)) return errorResult(appI18n.getDictionary(preferences.menuLanguage).errors.invalidSource);
   try {
     return await saveImageBuffer(mdFilePath, fileName, arrayBuffer);
   } catch (error) {
@@ -1122,7 +1142,7 @@ function showHelpWindow(section = 'guide') {
     minHeight: 520,
     backgroundColor: themeBackgroundColor(theme),
     show: false,
-    title: 'Markdown阅读器帮助',
+    title: appI18n.t(preferences.menuLanguage, 'helpTitle'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

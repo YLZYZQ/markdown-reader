@@ -5,6 +5,8 @@
 // 偏好通过主进程 preferences.json 持久化（与字号/字体同一事实源）。
 window.ReadingExperience = (() => {
   const byId = (id) => document.getElementById(id);
+  const language = () => (document.documentElement.lang === 'en-US' ? 'en-US' : 'zh-CN');
+  const tr = (key, values) => window.AppI18n.t(language(), key, values);
 
   // 编辑器实例可能因文档替换而重建，一律通过 window.editor 动态取用。
   function create({
@@ -103,7 +105,7 @@ window.ReadingExperience = (() => {
       const el = byId('reading-progress');
       if (el) {
         el.textContent = `${Math.min(100, progress)}%`;
-        el.title = '当前文档阅读进度';
+        el.title = tr('status.readingTitle');
       }
     }
     editorElement.addEventListener('scroll', () => {
@@ -129,7 +131,8 @@ window.ReadingExperience = (() => {
       if (button) {
         button.setAttribute('aria-pressed', String(focusMode));
         button.classList.toggle('active', focusMode);
-        button.title = focusMode ? '退出专注模式 (Esc)' : '专注模式 (F8)';
+        button.title = focusMode ? tr('toolbar.exitFocus') : tr('toolbar.focusTitle');
+        button.setAttribute('aria-label', focusMode ? tr('toolbar.exitFocus') : tr('toolbar.focusAria'));
       }
       updateFocusedBlock(false);
       requestAnimationFrame(updatePosition);
@@ -193,10 +196,19 @@ window.ReadingExperience = (() => {
       const cjk = (text.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || []).length;
       const words = (text.replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' ')
         .match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) || []).length;
-      byId('word-count').textContent = `${characters.toLocaleString('zh-CN')} 字符`;
-      byId('word-count').title = `渲染正文（含代码），不含空白与 Markdown 标记；中日韩文字 ${cjk} 字，其他文字 ${words} 词`;
-      byId('reading-time').textContent = `约 ${characters ? Math.max(1, Math.ceil(cjk / 400 + words / 200)) : 0} 分钟`;
-      byId('reading-time').title = '估算阅读时间：中日韩文字 400 字/分钟，其他文字 200 词/分钟';
+      byId('word-count').textContent = tr('status.characters', {
+        count: characters.toLocaleString(language())
+      });
+      byId('word-count').title = tr('status.wordCountTitle', { cjk, words });
+      byId('reading-time').textContent = tr('status.minutes', {
+        count: characters ? Math.max(1, Math.ceil(cjk / 400 + words / 200)) : 0
+      });
+      byId('reading-time').title = tr('status.readingTimeEstimate');
+      const focusButton = byId('btn-focus');
+      if (focusButton) {
+        focusButton.title = focusMode ? tr('toolbar.exitFocus') : tr('toolbar.focusTitle');
+        focusButton.setAttribute('aria-label', focusMode ? tr('toolbar.exitFocus') : tr('toolbar.focusAria'));
+      }
       updatePosition();
       updateFocusedBlock(false);
     }

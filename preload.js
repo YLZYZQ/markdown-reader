@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   // 系统主题变化
   onSystemThemeChanged: (cb) => on('theme:systemChanged', cb),
   onHelpStateChanged: (cb) => on('help:stateChanged', cb),
+  onHelpSectionChanged: (cb) => on('help:showSection', cb),
   onZoomLevelChanged: (cb) => on('zoom:levelChanged', cb),
 
   // 文件被外部程序修改
