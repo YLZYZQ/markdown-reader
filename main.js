@@ -1,7 +1,7 @@
 'use strict';
 
 // 主进程：窗口、菜单、文件读写和未保存内容保护。
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell, screen } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, net, shell, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -21,6 +21,8 @@ const { resolveSaveChord } = require('./lib/save-chord');
 const { loadPreferences, savePreferences, boundsIntersectDisplay } = require('./lib/preferences');
 const { addRecentEntry, loadRecent, saveRecent } = require('./lib/recent');
 const { clearSessionBackup, readSessionBackup, writeSessionBackup } = require('./lib/session-backup');
+const { fetchLatestRelease, isNewerVersion } = require('./lib/update-checker');
+const { formatMenuLabel, getMenuLabels, MENU_LANGUAGES } = require('./lib/menu-labels');
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const authorizedDocumentPaths = new Set();
@@ -28,6 +30,12 @@ const authorizedDocumentPaths = new Set();
 const windowContexts = new Map();
 let activeWindow = null;
 let backupOwnerContextId = null;
+let helpWindow = null;
+let helpWindowWebContentsId = null;
+let requestedHelpSection = 'guide';
+let automaticUpdateCheckTimer = null;
+let updateCheckInFlight = false;
+const AUTOMATIC_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const initialStartupDocumentPath = parseFileArg(process.argv);
 let deferredOpenFilePath = null;
 
@@ -78,7 +86,8 @@ function updatePreferences(patch) {
       console.warn('保存偏好失败:', error);
     }
   }, 300);
-  if (menuBuilt && 'theme' in patch) buildMenu();
+  if (menuBuilt && ('theme' in patch || 'menuLanguage' in patch)) buildMenu();
+  if ('theme' in patch) sendHelpState();
 }
 
 const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR ||
@@ -96,6 +105,107 @@ function getWindowContext(event) {
 
 function isCurrentRenderer(event) {
   return Boolean(getWindowContext(event));
+}
+
+function isHelpRenderer(event) {
+  return helpWindowWebContentsId !== null && event.sender.id === helpWindowWebContentsId;
+}
+
+function helpState() {
+  return {
+    version: app.getVersion(),
+    themePreference: preferences.theme,
+    systemTheme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  };
+}
+
+function resolvedTheme() {
+  if (preferences.theme !== 'system') return preferences.theme;
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+function themeBackgroundColor(theme) {
+  if (theme === 'dark') return '#211f1b';
+  if (theme === 'cream') return '#fbf7ec';
+  return '#fffdf8';
+}
+
+function sendHelpState() {
+  if (!helpWindow || helpWindow.isDestroyed()) return;
+  helpWindow.webContents.send('help:stateChanged', helpState());
+}
+
+function showMessageBoxSafe(window, options) {
+  return window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+}
+
+async function checkForUpdates({ automatic = false } = {}) {
+  if (updateCheckInFlight) return;
+  const t = getMenuLabels(preferences.menuLanguage);
+  updateCheckInFlight = true;
+  try {
+    const latest = await fetchLatestRelease({ fetchImpl: net.fetch, timeoutMs: 8000 });
+    updatePreferences({ lastUpdateCheckAt: Date.now() });
+
+    if (!isNewerVersion(latest.version, app.getVersion())) {
+      if (!automatic) {
+        await showMessageBoxSafe(currentWindow(), {
+          type: 'info',
+          title: t.upToDateTitle,
+          message: t.upToDateMessage,
+          detail: `${t.currentVersion}：v${app.getVersion()}\n${t.latestVersion}：v${latest.version}`,
+          buttons: ['OK'],
+          defaultId: 0,
+          noLink: true
+        });
+      }
+      return;
+    }
+
+    const detailParts = [
+      `${t.currentVersion}：v${app.getVersion()}`,
+      `${t.latestVersion}：v${latest.version}`,
+      '',
+      t.updateActionHint
+    ];
+    if (latest.notes) detailParts.splice(2, 0, '', `${t.releaseNotes}：\n${latest.notes}`);
+
+    const result = await showMessageBoxSafe(currentWindow(), {
+      type: 'info',
+      title: t.updateTitle,
+      message: formatMenuLabel(t.updateMessage, { version: latest.version }),
+      detail: detailParts.join('\n'),
+      buttons: [t.viewRelease, t.later],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    });
+    if (result.response === 0) await openExternalUrl(latest.releasesUrl);
+  } catch (error) {
+    console.warn('检查更新失败:', error?.message || error);
+    if (!automatic) {
+      await showMessageBoxSafe(currentWindow(), {
+        type: 'warning',
+        title: t.checkFailedTitle,
+        message: t.checkFailedMessage,
+        detail: t.checkFailedDetail,
+        buttons: ['OK'],
+        defaultId: 0,
+        noLink: true
+      });
+    }
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+function scheduleAutomaticUpdateCheck() {
+  if (automaticUpdateCheckTimer || !preferences.updateCheckEnabled) return;
+  if (preferences.lastUpdateCheckAt + AUTOMATIC_UPDATE_CHECK_INTERVAL_MS > Date.now()) return;
+  automaticUpdateCheckTimer = setTimeout(() => {
+    automaticUpdateCheckTimer = null;
+    void checkForUpdates({ automatic: true });
+  }, 3000);
 }
 
 function currentWindow() {
@@ -316,7 +426,7 @@ function createWindow(startupDocumentPath = null) {
     minHeight: 500,
     x,
     y,
-    backgroundColor: '#ffffff',
+    backgroundColor: themeBackgroundColor(resolvedTheme()),
     show: false,
     title: '未命名.md - Markdown阅读器',
     webPreferences: {
@@ -394,11 +504,6 @@ function createWindow(startupDocumentPath = null) {
   });
   return window;
 }
-
-ipcMain.handle('shell:openExternal', async (event, url) => {
-  if (!isCurrentRenderer(event) || typeof url !== 'string') return false;
-  return openExternalUrl(url);
-});
 
 ipcMain.handle('file:open', async (event) => {
   const context = getWindowContext(event);
@@ -745,6 +850,16 @@ ipcMain.handle('theme:getSystem', (event) => {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
 });
 
+ipcMain.handle('help:getState', (event) => {
+  if (!isHelpRenderer(event)) return null;
+  return helpState();
+});
+
+ipcMain.handle('shell:openExternal', async (event, url) => {
+  if ((!isCurrentRenderer(event) && !isHelpRenderer(event)) || typeof url !== 'string') return false;
+  return openExternalUrl(url);
+});
+
 ipcMain.handle('image:saveBlob', async (event, mdFilePath, fileName, arrayBuffer) => {
   if (!isCurrentRenderer(event)) return errorResult('无效的调用来源');
   try {
@@ -756,6 +871,7 @@ ipcMain.handle('image:saveBlob', async (event, mdFilePath, fileName, arrayBuffer
 
 function buildMenu() {
   const isMac = process.platform === 'darwin';
+  const t = getMenuLabels(preferences.menuLanguage);
   const sendCommand = (name, payload) => {
     currentWindow()?.webContents.send('editor:command', name, payload);
   };
@@ -768,34 +884,53 @@ function buildMenu() {
     updatePreferences({ zoomLevel: contents.getZoomLevel() });
     contents.send('zoom:levelChanged', contents.getZoomLevel());
   };
-  const showInfoDialog = (options) => {
+  const sendCommandOrStartWindow = (name) => {
     const window = currentWindow();
-    if (!window || window.isDestroyed()) return;
-    dialog.showMessageBox(window, options);
+    if (window && !window.isDestroyed()) {
+      window.webContents.send(`menu:${name}`);
+      return;
+    }
+    const created = createWindow();
+    created.webContents.once('did-finish-load', () => {
+      if (!created.isDestroyed()) created.webContents.send(`menu:${name}`);
+    });
+  };
+  const setThemePreference = (theme) => {
+    updatePreferences({ theme });
+    for (const context of windowContexts.values()) {
+      if (theme === 'system') context.window?.webContents.send('editor:command', 'followSystemTheme');
+      else context.window?.webContents.send('editor:command', 'setTheme', { theme });
+    }
+  };
+  const cycleTheme = () => {
+    const current = preferences.theme === 'system'
+      ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+      : preferences.theme;
+    setThemePreference(current === 'light' ? 'cream' : current === 'cream' ? 'dark' : 'light');
   };
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
     {
-      label: '文件',
+      label: t.file,
       submenu: [
-        { label: '新建', accelerator: 'CmdOrCtrl+N', click: () => sendCommand('new') },
-        { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => focusWindow(createWindow()) },
-        { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => currentWindow()?.webContents.send('menu:open') },
+        { label: t.new, accelerator: 'CmdOrCtrl+N', click: () => sendCommandOrStartWindow('new') },
+        { label: t.newWindow, accelerator: 'CmdOrCtrl+Shift+N', click: () => focusWindow(createWindow()) },
+        { label: t.open, accelerator: 'CmdOrCtrl+O', click: () => sendCommandOrStartWindow('open') },
         // Ctrl+S 实际由 before-input-event 拦截转发；这里只显示快捷键（registerAccelerator: false）。
-        { label: '保存', accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: () => currentWindow()?.webContents.send('menu:save') },
-        { label: '另存为…', accelerator: 'CmdOrCtrl+Shift+S', click: () => currentWindow()?.webContents.send('menu:saveAs') },
+        { label: t.save, accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: () => currentWindow()?.webContents.send('menu:save') },
+        { label: t.saveAs, accelerator: 'CmdOrCtrl+Shift+S', click: () => currentWindow()?.webContents.send('menu:saveAs') },
         { type: 'separator' },
-        { label: '打印…', accelerator: 'CmdOrCtrl+P', click: () => sendCommand('print') },
+        { label: t.print, accelerator: 'CmdOrCtrl+P', click: () => sendCommand('print') },
         {
-          label: '导出',
+          label: t.export,
           submenu: [
-            { label: 'PDF…', click: () => sendCommand('export', { format: 'pdf' }) },
-            { label: 'HTML…', click: () => sendCommand('export', { format: 'html' }) },
+            { label: t.pdf, click: () => sendCommand('export', { format: 'pdf' }) },
+            { label: t.html, click: () => sendCommand('export', { format: 'html' }) },
           ]
         },
         { type: 'separator' },
         {
-          label: '最近打开',
+          label: t.recent,
           submenu: recentEntries.length ? [
             ...recentEntries.map((entry) => ({
               label: path.basename(entry.path),
@@ -804,92 +939,99 @@ function buildMenu() {
               }
             })),
             { type: 'separator' },
-            { label: '清除最近打开记录', click: clearRecentDocuments },
-          ] : [{ label: '（暂无记录）', enabled: false }]
+            { label: t.clearRecent, click: clearRecentDocuments },
+          ] : [{ label: t.noRecent, enabled: false }]
         },
         { type: 'separator' },
-        isMac ? { role: 'close' } : { role: 'quit', label: '退出' }
+        isMac ? { role: 'close', label: t.close } : { role: 'quit', label: t.quit }
       ]
     },
     {
-      label: '编辑',
+      label: t.edit,
       submenu: [
-        { label: '撤销', accelerator: 'CmdOrCtrl+Z', click: () => sendCommand('undo') },
-        { label: '重做', accelerator: 'CmdOrCtrl+Shift+Z', click: () => sendCommand('redo') },
+        { label: t.undo, accelerator: 'CmdOrCtrl+Z', click: () => sendCommand('undo') },
+        { label: t.redo, accelerator: 'CmdOrCtrl+Shift+Z', click: () => sendCommand('redo') },
         { type: 'separator' },
-        { role: 'cut', label: '剪切' },
-        { role: 'copy', label: '复制' },
-        { role: 'paste', label: '粘贴' },
-        { label: '全选', accelerator: 'CmdOrCtrl+A', click: () => sendCommand('selectAll') },
+        { role: 'cut', label: t.cut },
+        { role: 'copy', label: t.copy },
+        { role: 'paste', label: t.paste },
+        { label: t.selectAll, accelerator: 'CmdOrCtrl+A', click: () => sendCommand('selectAll') },
         { type: 'separator' },
-        { label: '查找…', accelerator: 'CmdOrCtrl+F', click: () => sendCommand('find') },
-        { label: '查找下一个', accelerator: 'F3', click: () => sendCommand('findNext') },
-        { label: '查找上一个', accelerator: 'Shift+F3', click: () => sendCommand('findPrevious') },
-        { label: '替换…', accelerator: 'CmdOrCtrl+H', click: () => sendCommand('replace') }
+        { label: t.find, accelerator: 'CmdOrCtrl+F', click: () => sendCommand('find') },
+        { label: t.findNext, accelerator: 'F3', click: () => sendCommand('findNext') },
+        { label: t.findPrevious, accelerator: 'Shift+F3', click: () => sendCommand('findPrevious') },
+        { label: t.replace, accelerator: 'CmdOrCtrl+H', click: () => sendCommand('replace') }
       ]
     },
     {
-      label: '段落',
+      label: t.paragraph,
       submenu: [
-        { label: '正文', accelerator: 'CmdOrCtrl+0', click: () => sendCommand('heading', { level: 0 }) },
+        { label: t.text, accelerator: 'CmdOrCtrl+0', click: () => sendCommand('heading', { level: 0 }) },
         ...Array.from({ length: 6 }, (_, index) => ({
-          label: `${index + 1} 级标题`,
+          label: `${index + 1}${t.headingLevel}`,
           accelerator: `CmdOrCtrl+${index + 1}`,
           click: () => sendCommand('heading', { level: index + 1 })
         })),
         { type: 'separator' },
-        { label: '引用块', click: () => sendCommand('blockQuote') },
-        { label: '无序列表', click: () => sendCommand('bulletList') },
-        { label: '有序列表', click: () => sendCommand('orderedList') },
-        { label: '任务列表', click: () => sendCommand('taskList') },
-        { label: '代码块', accelerator: 'CmdOrCtrl+Shift+K', click: () => sendCommand('codeBlock') }
+        { label: t.blockQuote, click: () => sendCommand('blockQuote') },
+        { label: t.bulletList, click: () => sendCommand('bulletList') },
+        { label: t.orderedList, click: () => sendCommand('orderedList') },
+        { label: t.taskList, click: () => sendCommand('taskList') },
+        { label: t.codeBlock, accelerator: 'CmdOrCtrl+Shift+K', click: () => sendCommand('codeBlock') }
       ]
     },
     {
-      label: '格式',
+      label: t.format,
       submenu: [
-        { label: '加粗', accelerator: 'CmdOrCtrl+B', click: () => sendCommand('bold') },
-        { label: '斜体', accelerator: 'CmdOrCtrl+I', click: () => sendCommand('italic') },
-        { label: '删除线', click: () => sendCommand('strike') },
-        { label: '行内代码', click: () => sendCommand('code') },
+        { label: t.bold, accelerator: 'CmdOrCtrl+B', click: () => sendCommand('bold') },
+        { label: t.italic, accelerator: 'CmdOrCtrl+I', click: () => sendCommand('italic') },
+        { label: t.strike, click: () => sendCommand('strike') },
+        { label: t.inlineCode, click: () => sendCommand('code') },
         { type: 'separator' },
-        { label: '插入链接…', accelerator: 'CmdOrCtrl+K', click: () => sendCommand('popup', { name: 'link' }) }
+        { label: t.insertLink, accelerator: 'CmdOrCtrl+K', click: () => sendCommand('popup', { name: 'link' }) }
       ]
     },
     {
-      label: '插入',
+      label: t.insert,
       submenu: [
-        { label: '图片…', click: () => sendCommand('popup', { name: 'image' }) },
-        { label: '链接…', click: () => sendCommand('popup', { name: 'link' }) },
-        { label: '表格…', click: () => sendCommand('popup', { name: 'table' }) },
-        { label: '代码块', click: () => sendCommand('codeBlock') },
-        { label: '水平分割线', click: () => sendCommand('hr') },
-        { label: '日期时间', click: () => sendCommand('dateTime') }
+        { label: t.image, click: () => sendCommand('popup', { name: 'image' }) },
+        { label: t.link, click: () => sendCommand('popup', { name: 'link' }) },
+        { label: t.table, click: () => sendCommand('popup', { name: 'table' }) },
+        { label: t.codeBlock, click: () => sendCommand('codeBlock') },
+        { label: t.horizontalRule, click: () => sendCommand('hr') },
+        { label: t.dateTime, click: () => sendCommand('dateTime') }
       ]
     },
     {
-      label: '视图',
+      label: t.view,
       submenu: [
-        { label: '显示/隐藏文件侧边栏', accelerator: 'CmdOrCtrl+Shift+E', click: () => sendCommand('toggleSidebar') },
-        { label: '大纲面板', accelerator: 'CmdOrCtrl+Shift+O', click: () => sendCommand('showOutline') },
-        { label: '专注模式', accelerator: 'F8', click: () => sendCommand('toggleFocus') },
+        { label: t.sidebar, accelerator: 'CmdOrCtrl+Shift+E', click: () => sendCommand('toggleSidebar') },
+        { label: t.outline, accelerator: 'CmdOrCtrl+Shift+O', click: () => sendCommand('showOutline') },
+        { label: t.focus, accelerator: 'F8', click: () => sendCommand('toggleFocus') },
         { type: 'separator' },
-        { label: '切换源码/所见即所得', accelerator: 'CmdOrCtrl+/', click: () => sendCommand('toggleMode') },
+        { label: t.toggleMode, accelerator: 'CmdOrCtrl+/', click: () => sendCommand('toggleMode') },
         { type: 'separator' },
-        { label: '切换主题', accelerator: 'CmdOrCtrl+Shift+T', click: () => currentWindow()?.webContents.send('menu:toggleTheme') },
+        { label: t.cycleTheme, accelerator: 'CmdOrCtrl+Shift+T', click: cycleTheme },
         {
-          label: '跟随系统主题',
-          type: 'checkbox',
-          checked: preferences.theme === 'system',
-          click: () => {
-            updatePreferences({ theme: 'system' });
-            for (const context of windowContexts.values()) {
-              context.window?.webContents.send('editor:command', 'followSystemTheme');
-            }
-          }
+          label: t.theme,
+          submenu: [
+            { label: t.followSystem, type: 'radio', checked: preferences.theme === 'system', click: () => setThemePreference('system') },
+            { label: t.light, type: 'radio', checked: preferences.theme === 'light', click: () => setThemePreference('light') },
+            { label: t.cream, type: 'radio', checked: preferences.theme === 'cream', click: () => setThemePreference('cream') },
+            { label: t.dark, type: 'radio', checked: preferences.theme === 'dark', click: () => setThemePreference('dark') },
+          ]
         },
         {
-          label: '自动保存',
+          label: t.language,
+          submenu: MENU_LANGUAGES.map((language) => ({
+            label: language === 'zh-CN' ? getMenuLabels(language).chinese : getMenuLabels(language).english,
+            type: 'radio',
+            checked: preferences.menuLanguage === language,
+            click: () => updatePreferences({ menuLanguage: language })
+          })),
+        },
+        {
+          label: t.autoSave,
           type: 'checkbox',
           checked: preferences.autoSave === true,
           click: () => {
@@ -900,7 +1042,7 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
-          label: '字号',
+          label: t.fontSize,
           submenu: [14, 16, 18, 20, 22, 24].map((size) => ({
             label: `${size} px`,
             type: 'radio',
@@ -912,60 +1054,106 @@ function buildMenu() {
           })),
         },
         {
-          label: '正文字体',
+          label: t.editorFont,
           submenu: [
-            { label: '跟随主题', type: 'radio', checked: !preferences.editorFontFamily, click: () => { updatePreferences({ editorFontFamily: '' }); sendCommand('setFontFamily', { family: '' }); } },
-            { label: '无衬线', type: 'radio', checked: preferences.editorFontFamily === 'sans', click: () => { updatePreferences({ editorFontFamily: 'sans' }); sendCommand('setFontFamily', { family: 'sans' }); } },
-            { label: '衬线', type: 'radio', checked: preferences.editorFontFamily === 'serif', click: () => { updatePreferences({ editorFontFamily: 'serif' }); sendCommand('setFontFamily', { family: 'serif' }); } },
-            { label: '等宽', type: 'radio', checked: preferences.editorFontFamily === 'mono', click: () => { updatePreferences({ editorFontFamily: 'mono' }); sendCommand('setFontFamily', { family: 'mono' }); } },
+            { label: t.followTheme, type: 'radio', checked: !preferences.editorFontFamily, click: () => { updatePreferences({ editorFontFamily: '' }); sendCommand('setFontFamily', { family: '' }); } },
+            { label: t.sans, type: 'radio', checked: preferences.editorFontFamily === 'sans', click: () => { updatePreferences({ editorFontFamily: 'sans' }); sendCommand('setFontFamily', { family: 'sans' }); } },
+            { label: t.serif, type: 'radio', checked: preferences.editorFontFamily === 'serif', click: () => { updatePreferences({ editorFontFamily: 'serif' }); sendCommand('setFontFamily', { family: 'serif' }); } },
+            { label: t.mono, type: 'radio', checked: preferences.editorFontFamily === 'mono', click: () => { updatePreferences({ editorFontFamily: 'mono' }); sendCommand('setFontFamily', { family: 'mono' }); } },
           ],
         },
         { type: 'separator' },
-        { label: '放大', accelerator: 'CmdOrCtrl+=', click: () => changeZoom(0.5) },
-        { label: '缩小', accelerator: 'CmdOrCtrl+-', click: () => changeZoom(-0.5) },
-        { label: '重置缩放', accelerator: 'CmdOrCtrl+0', click: () => changeZoom(null) },
+        { label: t.zoomIn, accelerator: 'CmdOrCtrl+=', click: () => changeZoom(0.5) },
+        { label: t.zoomOut, accelerator: 'CmdOrCtrl+-', click: () => changeZoom(-0.5) },
+        { label: t.resetZoom, accelerator: 'CmdOrCtrl+0', click: () => changeZoom(null) },
         { type: 'separator' },
-        { role: 'togglefullscreen', label: '全屏' }
+        { role: 'togglefullscreen', label: t.fullscreen }
       ]
     },
     {
-      label: '帮助',
+      label: t.help,
       submenu: [
+        { label: t.checkUpdates, click: () => void checkForUpdates() },
         {
-          label: '操作说明',
-          click: () => showInfoDialog({
-            type: 'info',
-            title: '操作说明',
-            message: 'Markdown阅读器操作说明',
-            detail: [
-              '打开文档：双击 .md 文件、右键“使用 Markdown阅读器打开”、Ctrl+O 或拖拽文件。',
-              '新建文档：直接双击阅读器程序，或按 Ctrl+N。',
-              '多窗口：再次通过文件关联打开其他文件夹文档会新建窗口；Ctrl+Shift+N 可新建空白窗口。',
-              '保存：Ctrl+S 保存，Ctrl+Shift+S 另存为。',
-              '文件侧边栏：显示当前文档目录，点击文件切换；按 Ctrl+Shift+E 可收起或展开。',
-              '大纲面板：侧边栏“大纲”页列出全部标题，点击跳转；按 Ctrl+Shift+O 打开。',
-              '编辑：Ctrl+/ 切换源码和所见即所得，Ctrl+F 查找，Ctrl+H 替换。',
-              '打印与导出：Ctrl+P 打印，文件菜单可导出 PDF 或单文件 HTML（含图表）。',
-              '主题：Ctrl+Shift+T 切换亮色和暗色主题，也可设为跟随系统；偏好会自动保存。',
-              '缩放：Ctrl+滚轮或 Ctrl+= / Ctrl+- 缩放，Ctrl+0 重置。',
-            ].join('\n\n')
-          })
+          label: t.automaticUpdateCheck,
+          type: 'checkbox',
+          checked: preferences.updateCheckEnabled,
+          click: () => {
+            const enabled = !preferences.updateCheckEnabled;
+            updatePreferences({ updateCheckEnabled: enabled });
+            if (enabled) {
+              scheduleAutomaticUpdateCheck();
+            } else if (automaticUpdateCheckTimer) {
+              clearTimeout(automaticUpdateCheckTimer);
+              automaticUpdateCheckTimer = null;
+            }
+          }
+        },
+        {
+          label: t.guide,
+          click: () => showHelpWindow('guide')
         },
         { type: 'separator' },
         {
-          label: '关于',
-          click: () => showInfoDialog({
-          type: 'info',
-          title: '关于',
-          message: `Markdown阅读器 ${app.getVersion()}`,
-          detail: '一个体验接近成熟商业产品的 Markdown 阅读器/编辑器\n基于 Electron、Toast UI Editor、Mermaid 与 PrismJS\n即时渲染 · 亮/暗主题 · 免安装'
-          })
+          label: t.about,
+          click: () => showHelpWindow('about')
         }
       ]
     }
   ];
   menuBuilt = true;
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function showHelpWindow(section = 'guide') {
+  requestedHelpSection = section;
+  if (helpWindow && !helpWindow.isDestroyed()) {
+    focusWindow(helpWindow);
+    helpWindow.webContents.send('help:showSection', { section });
+    sendHelpState();
+    return helpWindow;
+  }
+
+  const theme = resolvedTheme();
+  helpWindow = new BrowserWindow({
+    width: 920,
+    height: 660,
+    minWidth: 720,
+    minHeight: 520,
+    backgroundColor: themeBackgroundColor(theme),
+    show: false,
+    title: 'Markdown阅读器帮助',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false
+    }
+  });
+  helpWindowWebContentsId = helpWindow.webContents.id;
+  helpWindow.removeMenu();
+
+  helpWindow.webContents.on('did-finish-load', () => {
+    sendHelpState();
+    helpWindow.webContents.send('help:showSection', { section: requestedHelpSection });
+  });
+  helpWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    void openExternalUrl(url);
+  });
+  helpWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void openExternalUrl(url);
+    return { action: 'deny' };
+  });
+  helpWindow.once('ready-to-show', () => helpWindow.show());
+  helpWindow.on('closed', () => {
+    helpWindow = null;
+    helpWindowWebContentsId = null;
+  });
+  void helpWindow.loadFile(path.join(__dirname, 'renderer', 'help.html'));
+  return helpWindow;
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -994,16 +1182,25 @@ if (!app.requestSingleInstanceLock()) {
     createWindow(deferredOpenFilePath || initialStartupDocumentPath);
     deferredOpenFilePath = null;
     buildMenu();
+    scheduleAutomaticUpdateCheck();
 
     nativeTheme.on('updated', () => {
       const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
       for (const context of windowContexts.values()) {
         context.window?.webContents.send('theme:systemChanged', theme);
       }
+      sendHelpState();
     });
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (windowContexts.size === 0) createWindow();
+    });
+
+    app.on('will-quit', () => {
+      if (automaticUpdateCheckTimer) {
+        clearTimeout(automaticUpdateCheckTimer);
+        automaticUpdateCheckTimer = null;
+      }
     });
   });
 

@@ -126,3 +126,23 @@ test('typewriterMode only accepts true', () => {
   assert.equal(sanitizePreferences({ typewriterMode: false }).typewriterMode, false);
   assert.equal(sanitizePreferences({ typewriterMode: 'yes' }).typewriterMode, false);
 });
+
+test('update check preferences are sanitized', () => {
+  const enabled = sanitizePreferences({ updateCheckEnabled: false, lastUpdateCheckAt: 123456 });
+  assert.equal(enabled.updateCheckEnabled, false);
+  assert.equal(enabled.lastUpdateCheckAt, 123456);
+
+  const invalid = sanitizePreferences({ updateCheckEnabled: 'no', lastUpdateCheckAt: -1 });
+  assert.equal(invalid.updateCheckEnabled, true);
+  assert.equal(invalid.lastUpdateCheckAt, 0);
+});
+
+test('cream theme and menu language preferences are sanitized', () => {
+  const prefs = sanitizePreferences({ theme: 'cream', menuLanguage: 'en-US' });
+  assert.equal(prefs.theme, 'cream');
+  assert.equal(prefs.menuLanguage, 'en-US');
+
+  const invalid = sanitizePreferences({ theme: 'cream-white', menuLanguage: 'en-GB' });
+  assert.equal(invalid.theme, 'system');
+  assert.equal(invalid.menuLanguage, 'zh-CN');
+});

@@ -16,6 +16,7 @@ module.exports = async function afterPack(context) {
     '--set-icon', path.join(projectDir, 'build', 'icon.ico'),
     '--set-version-string', 'FileDescription', productName,
     '--set-version-string', 'ProductName', productName,
+    '--set-version-string', 'CompanyName', productName,
     '--set-version-string', 'InternalName', productName,
     '--set-version-string', 'OriginalFilename', `${productName}.exe`,
     '--set-file-version', version,

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self';
+                 style-src 'self';
+                 img-src 'self' data:;
+                 font-src 'self' data:;
+                 connect-src 'none';
+                 object-src 'none';
+                 base-uri 'self';
+                 form-action 'none';" />
+  <title>Markdown阅读器帮助</title>
+  <link rel="stylesheet" href="help.css" />
+</head>
+<body class="theme-light" data-section="guide">
+  <nav class="help-aside" role="tablist" aria-label="帮助分区">
+    <div class="aside-brand">
+      <span aria-hidden="true">M↓</span>
+      <strong>Markdown阅读器</strong>
+    </div>
+    <button id="btn-guide" class="help-nav active" type="button" role="tab" aria-controls="guide" aria-selected="true">操作说明</button>
+    <button id="btn-about" class="help-nav" type="button" role="tab" aria-controls="about" aria-selected="false">关于应用</button>
+    <div class="aside-foot">
+      <span id="help-version">Markdown阅读器</span>
+      <a id="open-source-link" href="https://github.com/YLZYZQ/markdown-reader/blob/main/THIRD_PARTY_NOTICES.md">开源许可</a>
+    </div>
+  </nav>
+
+  <main class="help-main">
+    <section id="guide" class="help-section" role="tabpanel" aria-labelledby="guide-title">
+      <header class="guide-header">
+        <div class="guide-title-group">
+          <p class="eyebrow">操作说明</p>
+          <h1 id="guide-title">让 Markdown 读起来更舒服</h1>
+          <p>从打开文件到长文阅读、编辑导出，这里按实际使用顺序整理了常用操作。快捷键以 Windows 菜单显示为准。</p>
+        </div>
+        <div class="quick-start" aria-label="最快开始方式">
+          <span class="quick-icon">M↓</span>
+          <div>
+            <strong>双击 .md 文件</strong>
+            <span>或拖入窗口、按 Ctrl+O 打开</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="guide-grid">
+        <article class="guide-card">
+          <h2>打开与多窗口</h2>
+          <dl>
+            <div><dt>打开文档</dt><dd>双击 .md 文件、拖入窗口，或按 <kbd>Ctrl</kbd>+<kbd>O</kbd>。</dd></div>
+            <div><dt>新建文档</dt><dd>按 <kbd>Ctrl</kbd>+<kbd>N</kbd>；双击应用图标会打开未命名文档。</dd></div>
+            <div><dt>并行阅读</dt><dd>从资源管理器打开不同文件会创建新窗口；同一文档重复打开会聚焦既有窗口。</dd></div>
+            <div><dt>新建空白窗口</dt><dd><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd>。</dd></div>
+          </dl>
+        </article>
+
+        <article class="guide-card">
+          <h2>浏览与导航</h2>
+          <dl>
+            <div><dt>文件侧边栏</dt><dd>按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> 收起或展开，点击同目录文件切换。</dd></div>
+            <div><dt>目录层级</dt><dd>点击文件夹进入；左上角返回按钮回到上一级，刷新按钮重新读取目录。</dd></div>
+            <div><dt>大纲</dt><dd>按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> 打开，点击标题跳转，当前章节自动高亮。</dd></div>
+            <div><dt>阅读进度</dt><dd>底部状态栏显示百分比，滚动时跟随更新。</dd></div>
+          </dl>
+        </article>
+
+        <article class="guide-card">
+          <h2>阅读体验</h2>
+          <dl>
+            <div><dt>主题</dt><dd><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> 循环浅色、奶油白和暗色，也可跟随系统。</dd></div>
+            <div><dt>菜单语言</dt><dd>在“视图 → 菜单语言”中切换中文 / English，偏好会自动保存。</dd></div>
+            <div><dt>排版</dt><dd>工具栏 Aa 打开设置，可调字号、正文宽度和正文字体。</dd></div>
+            <div><dt>专注模式</dt><dd><kbd>F8</kbd> 进入，只保留当前段落清晰可读，<kbd>Esc</kbd> 退出。</dd></div>
+            <div><dt>缩放</dt><dd><kbd>Ctrl</kbd>+滚轮、<kbd>Ctrl</kbd>+<kbd>=</kbd>、<kbd>Ctrl</kbd>+<kbd>-</kbd>，<kbd>Ctrl</kbd>+<kbd>0</kbd> 复位。</dd></div>
+          </dl>
+        </article>
+
+        <article class="guide-card">
+          <h2>编辑与查找</h2>
+          <dl>
+            <div><dt>编辑模式</dt><dd><kbd>Ctrl</kbd>+<kbd>/</kbd> 在所见即所得和 Markdown 源码间切换。</dd></div>
+            <div><dt>查找</dt><dd><kbd>Ctrl</kbd>+<kbd>F</kbd> 输入即定位，<kbd>Enter</kbd>/<kbd>Shift</kbd>+<kbd>Enter</kbd> 跳转。</dd></div>
+            <div><dt>替换</dt><dd><kbd>Ctrl</kbd>+<kbd>H</kbd> 展开替换，可单次或全部替换。</dd></div>
+            <div><dt>图表</dt><dd>Mermaid 图表随文档渲染；悬停代码块可复制内容。</dd></div>
+          </dl>
+        </article>
+
+        <article class="guide-card">
+          <h2>保存与输出</h2>
+          <dl>
+            <div><dt>保存</dt><dd><kbd>Ctrl</kbd>+<kbd>S</kbd>；另存为使用 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>。</dd></div>
+            <div><dt>自动保存</dt><dd>在“查看”菜单开启；关闭前的未保存内容也有崩溃恢复保护。</dd></div>
+            <div><dt>打印</dt><dd><kbd>Ctrl</kbd>+<kbd>P</kbd>。</dd></div>
+            <div><dt>导出</dt><dd>“文件 → 导出”生成 PDF 或单文件 HTML，图表一并输出。</dd></div>
+          </dl>
+        </article>
+
+        <article class="guide-card">
+          <h2>本地与安全</h2>
+          <dl>
+            <div><dt>数据位置</dt><dd>文档保存在你选择的位置；偏好和最近记录保存在本机用户数据目录。</dd></div>
+            <div><dt>外部修改</dt><dd>检测到文件被其他程序修改时会提示，避免覆盖新内容。</dd></div>
+            <div><dt>编码</dt><dd>读取 UTF-8 和 UTF-16 文档，保存使用 UTF-8。</dd></div>
+            <div><dt>便携版</dt><dd>数据随程序目录保存，适合放入 U 盘或同步盘。</dd></div>
+            <div><dt>版本更新</dt><dd>自动检查每天最多一次；也可在“帮助 → 检查更新…”手动检查。应用只提示，不自动下载安装。</dd></div>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+    <section id="about" class="help-section" role="tabpanel" hidden aria-labelledby="about-title">
+      <header class="about-header">
+        <div class="brand-mark">M↓</div>
+        <div>
+          <p class="eyebrow">Markdown阅读器</p>
+          <h1 id="about-title">专注本地阅读的 Markdown 工作台</h1>
+          <p>面向日常笔记、技术文档和长篇书稿，把即时渲染、清晰排版、长文导航和可靠保存放进一个轻量桌面应用。</p>
+        </div>
+      </header>
+
+      <div class="fact-strip">
+        <div><span>版本</span><strong id="about-version">1.5.5</strong></div>
+        <div><span>界面</span><strong>中文 · 亮暗主题</strong></div>
+        <div><span>数据方式</span><strong>本地优先</strong></div>
+        <div><span>许可证</span><strong>MIT</strong></div>
+      </div>
+
+      <div class="about-columns">
+        <article class="about-block">
+          <h2>核心体验</h2>
+          <ul>
+            <li><strong>阅读优先</strong>：居中正文列、可调宽度和字号、进度与阅读时间。</li>
+            <li><strong>长文导航</strong>：大纲跟随章节，文件侧边栏在同一目录内切换。</li>
+            <li><strong>沉浸工作</strong>：专注模式淡化无关内容，打字机模式保持光标居中。</li>
+            <li><strong>多窗口</strong>：不同文件夹的文档可以同时打开，互不替换。</li>
+          </ul>
+        </article>
+        <article class="about-block">
+          <h2>工程质量</h2>
+          <ul>
+            <li><strong>编辑可靠</strong>：未保存保护、外部修改提醒、可选自动保存和崩溃恢复。</li>
+            <li><strong>输出完整</strong>：打印、PDF 和单文件 HTML 保留图表与排版。</li>
+            <li><strong>来源清楚</strong>：直接依赖、锁定版本和许可证清单随仓库维护。</li>
+            <li><strong>更新提示</strong>：定时读取 GitHub 稳定发布信息，发现新版本时提醒你查看发布页。</li>
+            <li><strong>可验证</strong>：阅读、搜索、链接、侧栏、帮助页和更新检查均有回归测试。</li>
+          </ul>
+        </article>
+      </div>
+
+      <article class="provenance">
+        <h2>开源组件</h2>
+        <p>本项目使用 Electron、Toast UI Editor、Mermaid 与 PrismJS 构建运行能力；体验定位接近成熟商业产品，未复制闭源商业产品代码。完整组件、版本、上游项目和许可证信息见仓库中的 <code>THIRD_PARTY_NOTICES.md</code> 与 <code>THIRD_PARTY_LICENSES.md</code>。</p>
+      </article>
+    </section>
+  </main>
+
+  <script src="help.js"></script>
+</body>
+</html>

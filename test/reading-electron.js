@@ -193,6 +193,7 @@ app.whenReady().then(async () => {
       same, retained, before, content, undo: editor.getMarkdown(),
       darkClass: Boolean(document.querySelector('#editor .toastui-editor-defaultUI').classList.contains('toastui-editor-dark')),
       bodyDark: document.body.classList.contains('theme-dark'),
+      bodyCream: document.body.classList.contains('theme-cream'),
       icon: document.getElementById('theme-icon').textContent
     };
   });
@@ -200,12 +201,14 @@ app.whenReady().then(async () => {
   assert.equal(theme.retained, true);
   assert.equal(theme.before, theme.content);
   assert.equal(theme.undo, '起点');
-  assert.equal(theme.darkClass, true);
-  assert.equal(theme.bodyDark, true);
-  assert(prefPatches.some((p) => p && p.theme === 'dark'));
-  await capture('dark');
+  assert.equal(theme.darkClass, false);
+  assert.equal(theme.bodyDark, false);
+  assert.equal(theme.bodyCream, true);
+  assert(prefPatches.some((p) => p && p.theme === 'cream'));
+  await capture('cream');
   await run(() => document.getElementById('btn-theme').click());
   await wait(250);
+  await capture('dark');
 
   // —— 偏好回读：重启路径下栏宽/打字机生效 ——
   storedPrefs = { theme: 'dark', readingLineWidth: 640, typewriterMode: true, editorFontSize: 18 };

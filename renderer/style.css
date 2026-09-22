@@ -35,6 +35,32 @@ body.theme-light {
   --reading-selection: #ead1bb;
 }
 
+/* 奶油白主题（更明显的暖奶油色） */
+body.theme-cream {
+  color-scheme: light;
+  --bg: #fbf7ec;
+  --fg: #343129;
+  --muted: #7e7462;
+  --titlebar-bg: #f5eddd;
+  --titlebar-border: #e7dbc3;
+  --btn-bg: transparent;
+  --btn-bg-hover: #eee1c8;
+  --accent: #a2662f;
+  --statusbar-bg: #f5eddd;
+  --statusbar-border: #e7dbc3;
+  --editor-bg: #fbf7ec;
+  --overlay-border: #dbccae;
+  --overlay-shadow: 0 8px 28px rgba(82, 62, 26, 0.16), 0 2px 8px rgba(82, 62, 26, 0.08);
+  --drop-bg: rgba(162, 102, 47, 0.12);
+  --drop-border: #a2662f;
+  --reading-surface: #fbf7ec;
+  --reading-rule: #e9ddc5;
+  --reading-quote: #f4ebd8;
+  --reading-code: #f4ebd8;
+  --reading-table-head: #f2e7cf;
+  --reading-selection: #ecd3b1;
+}
+
 /* 暗色主题（暖深色） */
 body.theme-dark {
   color-scheme: dark;

@@ -210,11 +210,12 @@ window.api.onSystemOpenDocument((filePath) => {
 function applyTheme(theme, fromSystem = false) {
   if (fromSystem && !followsSystemTheme) return;
   currentTheme = theme;
-  document.body.classList.toggle('theme-dark', theme === 'dark');
-  document.body.classList.toggle('theme-light', theme === 'light');
-  themeIconEl.textContent = theme === 'dark' ? '☼' : '◐';
+  document.body.classList.remove('theme-light', 'theme-cream', 'theme-dark');
+  document.body.classList.add(`theme-${theme}`);
+  themeIconEl.textContent = theme === 'dark' ? '☼' : theme === 'cream' ? '◍' : '◐';
+  const themeName = theme === 'dark' ? '暗色' : theme === 'cream' ? '奶油白' : '亮色';
   themeIconEl.parentElement.title =
-    `切换主题 (当前: ${theme === 'dark' ? '暗色' : '亮色'}${fromSystem ? '，跟随系统' : ''})`;
+    `切换主题 (当前: ${themeName}${fromSystem ? '，跟随系统' : ''})`;
   // 主题样式由根 class 控制：toastui-editor-dark.css 常驻加载，
   // 切换 defaultUI 上的 dark class 即可换肤；保留编辑器实例、选区与撤销历史。
   document.querySelector('#editor .toastui-editor-defaultUI')
@@ -223,7 +224,7 @@ function applyTheme(theme, fromSystem = false) {
 
 function toggleTheme() {
   followsSystemTheme = false;
-  const next = currentTheme === 'dark' ? 'light' : 'dark';
+  const next = currentTheme === 'light' ? 'cream' : currentTheme === 'cream' ? 'dark' : 'light';
   window.api.setPreference({ theme: next });
   applyTheme(next);
 }
@@ -1317,6 +1318,13 @@ function handleEditorCommand(name, payload = {}) {
       case 'showOutline': setSidebarTab('outline'); break;
       case 'toggleFocus': readingTools?.toggleFocus(); break;
       case 'followSystemTheme': void followSystemTheme(); break;
+      case 'setTheme':
+        if (['light', 'cream', 'dark'].includes(payload.theme)) {
+          followsSystemTheme = false;
+          window.api.setPreference({ theme: payload.theme });
+          applyTheme(payload.theme);
+        }
+        break;
       case 'print': void printDocument(); break;
       case 'export': void exportDocument(payload.format === 'html' ? 'html' : 'pdf'); break;
       case 'autoSaveChanged': setAutoSaveEnabled(Boolean(payload.enabled)); break;
@@ -1550,7 +1558,7 @@ async function init() {
   let storedPrefs = null;
   try {
     storedPrefs = await window.api.getPreferences();
-    if (storedPrefs && (storedPrefs.theme === 'light' || storedPrefs.theme === 'dark')) {
+    if (storedPrefs && ['light', 'cream', 'dark'].includes(storedPrefs.theme)) {
       currentTheme = storedPrefs.theme;
       followsSystemTheme = false;
     } else {
@@ -1568,9 +1576,7 @@ async function init() {
   document.documentElement.style.setProperty('--reading-width', `${readingLineWidth}px`);
   const typewriterMode = Boolean(storedPrefs && storedPrefs.typewriterMode);
   document.body.classList.toggle('typewriter-mode', typewriterMode);
-  document.body.classList.toggle('theme-dark', currentTheme === 'dark');
-  document.body.classList.toggle('theme-light', currentTheme === 'light');
-  themeIconEl.textContent = currentTheme === 'dark' ? '☼' : '◐';
+  applyTheme(currentTheme);
   setSidebarCollapsed(sidebarCollapsed, false);
 
   editor = createEditor('');

@@ -202,9 +202,14 @@ app.whenReady().then(async () => {
     window.editor.setMarkdown('', true);
     await activateContextItem(null, '粘贴');
     rootResults.cutPaste = window.editor.getMarkdown();
-    rootResults.themeBefore = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
+    const readTheme = () => (
+      document.body.classList.contains('theme-dark') ? 'dark'
+        : document.body.classList.contains('theme-cream') ? 'cream'
+          : 'light'
+    );
+    rootResults.themeBefore = readTheme();
     await activateContextItem(null, '切换主题');
-    rootResults.themeAfter = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
+    rootResults.themeAfter = readTheme();
 
     // 与应用真实换文档路径一致：replaceEditorContent 重建编辑器并清空撤销历史，
     // 防止 Ctrl+Z 把上一份文档的内容带回新文档。
@@ -598,7 +603,9 @@ app.whenReady().then(async () => {
     `document.getElementById('zoom-level').textContent`
   );
   // v1.3：主题切换应写入偏好补丁；导出命令应携带 markdown 快照到达主进程。
-  root.themePrefPatchReceived = prefPatches.some((patch) => patch && patch.theme === 'dark');
+  root.themePrefPatchReceived = ['light', 'cream', 'dark'].some((theme) => (
+    prefPatches.some((patch) => patch && patch.theme === theme)
+  ));
   window.webContents.send('editor:command', 'export', { format: 'pdf' });
   await new Promise((resolve) => setTimeout(resolve, 300));
   root.exportWired = exportCalls.length === 1 && exportCalls[0].format === 'pdf' &&

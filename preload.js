@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
   stopWatchingDocument: () => ipcRenderer.send('document:stopWatching'),
   getSystemTheme: () => ipcRenderer.invoke('theme:getSystem'),
   getPreferences: () => ipcRenderer.invoke('prefs:getAll'),
+  getHelpState: () => ipcRenderer.invoke('help:getState'),
   setPreference: (patch) => ipcRenderer.send('prefs:set', patch),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
@@ -55,6 +56,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 系统主题变化
   onSystemThemeChanged: (cb) => on('theme:systemChanged', cb),
+  onHelpStateChanged: (cb) => on('help:stateChanged', cb),
   onZoomLevelChanged: (cb) => on('zoom:levelChanged', cb),
 
   // 文件被外部程序修改

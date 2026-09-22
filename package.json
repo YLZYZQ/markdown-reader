@@ -1,6 +1,6 @@
 {
   "name": "md-reader",
-  "version": "1.5.5",
+  "version": "1.9.0",
   "description": "Markdown阅读器",
   "main": "main.js",
   "author": "",
@@ -22,7 +22,9 @@
     "test:link": "electron test/link-electron.js",
     "test:close": "electron test/close-electron.js",
     "test:multi-window": "electron test/multi-window-electron.js",
-    "test:sidebar": "electron test/sidebar-electron.js"
+    "test:sidebar": "electron test/sidebar-electron.js",
+    "test:help": "electron test/help-electron.js",
+    "test:menu-language": "electron test/menu-language-electron.js"
   },
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",
