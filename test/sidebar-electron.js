@@ -1,6 +1,7 @@
 'use strict';
 
-// 侧栏回归：文件夹名进入子目录、箭头只展开/折叠、返回上一级；
+// 侧栏回归：树根固定为“当前文档所在目录的上一级”；
+// 单击文件夹行展开/折叠；打开子文件夹中的文件后不会困在子文件夹；
 // 文件页签切回后大纲面板必须真正隐藏。
 
 const { app, BrowserWindow, ipcMain } = require('electron');
@@ -20,19 +21,21 @@ ipcMain.handle('recent:get', () => []);
 ipcMain.handle('startup:takeDocument', () => ({ canceled: true }));
 ipcMain.handle('file:openPath', (_event, filePath) => ({
   filePath,
-  content: '# 当前文档',
+  content: '# 文档',
   baseUrl: `file:///${filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '')}/`
 }));
 ipcMain.handle('directory:listForDocument', (_event, filePath) => (
   fs.statSync(filePath).isDirectory() ? listDirectoryTree(filePath) : listDocumentTree(filePath)
 ));
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'md-reader-sidebar-docs-'));
-const folder = path.join(root, '子目录');
+// 目录结构：base/工作区/{当前.md, 子目录/{嵌套.md, 更深目录/深层.md}}
+// 打开 工作区 内的文件 → 树根应为 base；打开 子目录 内的文件 → 树根应为 工作区。
+const base = fs.mkdtempSync(path.join(os.tmpdir(), 'md-reader-sidebar-base-'));
+const workspace = path.join(base, '工作区');
+const folder = path.join(workspace, '子目录');
 const nestedFolder = path.join(folder, '更深目录');
 fs.mkdirSync(nestedFolder, { recursive: true });
-const currentPath = path.join(root, '当前.md');
-fs.writeFileSync(currentPath, '# 当前文档', 'utf8');
+fs.writeFileSync(path.join(workspace, '当前.md'), '# 当前文档', 'utf8');
 fs.writeFileSync(path.join(folder, '嵌套.md'), '# 嵌套', 'utf8');
 fs.writeFileSync(path.join(nestedFolder, '深层.md'), '# 深层', 'utf8');
 
@@ -63,121 +66,96 @@ app.whenReady().then(async () => {
   });
   await win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   await wait(400);
-  await win.webContents.executeJavaScript(`window.__testCurrentPath = ${JSON.stringify(currentPath)}`);
   const run = (fn) => win.webContents.executeJavaScript(`(${fn.toString()})()`);
-
-  const initial = await run(async () => {
-    const result = await window.api.openPath(window.__testCurrentPath);
+  const open = (filePath) => run(async (p) => {
+    const result = await window.api.openPath(p);
     window.loadContent(result.filePath, result.content, result.baseUrl);
     await new Promise((resolve) => setTimeout(resolve, 500));
-    return {
-      root: document.getElementById('sidebar-root').textContent,
-      directoryCount: document.querySelectorAll('#file-tree > .tree-directory').length,
-      upHidden: document.getElementById('btn-tree-up').hidden
-    };
-  });
-  assert.equal(initial.root, path.basename(root), JSON.stringify(initial));
-  assert.equal(initial.directoryCount, 1, JSON.stringify(initial));
-  assert.equal(initial.upHidden, true, JSON.stringify(initial));
+  }).then(() => filePath ? win.webContents.executeJavaScript(`(${(() => filePath).toString()})()`) : null)
+    .then(() => filePath);
 
-  const expanded = await run(async () => {
-    document.querySelector('.tree-chevron').dispatchEvent(new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true
+  const openAndState = async (filePath) => {
+    await win.webContents.executeJavaScript(`(async () => {
+      const result = await window.api.openPath(${JSON.stringify(filePath)});
+      window.loadContent(result.filePath, result.content, result.baseUrl);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    })()`);
+    return run(() => ({
+      root: document.getElementById('sidebar-root').title.split(String.fromCharCode(92)).join('/'),
+      rootName: document.getElementById('sidebar-root').textContent,
+      upButtonCount: document.querySelectorAll('#btn-tree-up').length,
+      active: (document.querySelector('.tree-file.active .tree-name') || {}).textContent || null,
+      topEntries: [...document.querySelectorAll('#file-tree > * > summary .tree-name, #file-tree > .tree-file > .tree-name')].map((el) => el.textContent)
     }));
+  };
+
+  // 打开 工作区/当前.md → 树根 = base
+  const atWorkspaceFile = await openAndState(path.join(workspace, '当前.md'));
+  assert.equal(atWorkspaceFile.root, base.replace(/\\/g, '/'), JSON.stringify(atWorkspaceFile));
+  assert.equal(atWorkspaceFile.upButtonCount, 0, JSON.stringify(atWorkspaceFile));
+  assert.ok(atWorkspaceFile.topEntries.includes('工作区'), JSON.stringify(atWorkspaceFile.topEntries));
+
+  // 打开 子目录/嵌套.md → 树根 = 工作区，子目录自动展开，不会困在子目录
+  const atSubfolderFile = await openAndState(path.join(folder, '嵌套.md'));
+  assert.equal(atSubfolderFile.root, workspace.replace(/\\/g, '/'), JSON.stringify(atSubfolderFile));
+  assert.equal(atSubfolderFile.active, '嵌套.md', JSON.stringify(atSubfolderFile));
+  const subfolderState = await run(() => ({
+    rootName: document.getElementById('sidebar-root').textContent,
+    directoryOpen: document.querySelector('#file-tree > .tree-directory').open,
+    files: [...document.querySelectorAll('#file-tree > .tree-directory > .tree-children > .tree-file > .tree-name')].map((el) => el.textContent)
+  }));
+  assert.equal(subfolderState.rootName, '工作区', JSON.stringify(subfolderState));
+  assert.equal(subfolderState.directoryOpen, true, JSON.stringify(subfolderState));
+  assert.ok(subfolderState.files.includes('嵌套.md'), JSON.stringify(subfolderState));
+
+  // 单击文件夹行 → 原生展开/折叠（无导航）
+  const toggleByRow = await run(async () => {
+    document.querySelector('#file-tree > .tree-directory > summary .tree-name')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 120));
     return {
-      open: document.querySelector('.tree-directory').open,
-      root: document.getElementById('sidebar-root').textContent
+      open: document.querySelector('#file-tree > .tree-directory').open,
+      root: document.getElementById('sidebar-root').title.split(String.fromCharCode(92)).join('/')
     };
   });
-  assert.equal(expanded.open, true, JSON.stringify(expanded));
-  assert.equal(expanded.root, path.basename(root), JSON.stringify(expanded));
+  assert.equal(toggleByRow.open, false, JSON.stringify(toggleByRow));
+  assert.equal(toggleByRow.root, workspace.replace(/\\/g, '/'), JSON.stringify(toggleByRow));
 
-  const entered = await run(async () => {
-    document.querySelector('.tree-directory .tree-name').dispatchEvent(new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true
-    }));
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return {
-      root: document.getElementById('sidebar-root').textContent,
-      upHidden: document.getElementById('btn-tree-up').hidden,
-      files: [...document.querySelectorAll('#file-tree > .tree-file > .tree-name')].map((item) => item.textContent)
-    };
-  });
-  assert.equal(entered.root, '子目录', JSON.stringify(entered));
-  assert.equal(entered.upHidden, false, JSON.stringify(entered));
-  assert.deepEqual(entered.files, ['嵌套.md'], JSON.stringify(entered));
+  // 打开 更深目录/深层.md（三级深度）→ 树根 = 子目录，同样有上一级视野
+  const atDeepFile = await openAndState(path.join(nestedFolder, '深层.md'));
+  assert.equal(atDeepFile.root, folder.replace(/\\/g, '/'), JSON.stringify(atDeepFile));
+  assert.equal(atDeepFile.active, '深层.md', JSON.stringify(atDeepFile));
 
-  const returned = await run(async () => {
-    document.getElementById('btn-tree-up').click();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return {
-      root: document.getElementById('sidebar-root').textContent,
-      upHidden: document.getElementById('btn-tree-up').hidden,
-      files: [...document.querySelectorAll('#file-tree > .tree-file > .tree-name')].map((item) => item.textContent)
-    };
-  });
-  assert.equal(returned.root, path.basename(root), JSON.stringify(returned));
-  assert.equal(returned.upHidden, true, JSON.stringify(returned));
-  assert.deepEqual(returned.files, ['当前.md'], JSON.stringify(returned));
-
-  // 展开子文件夹下拉后直接点击内部文件：树根应跟随文件所在目录，
-  // 返回箭头出现（与“先进入子文件夹再打开”结果一致）。
-  const expandAndOpen = await run(async () => {
-    document.querySelector('.tree-chevron').dispatchEvent(new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true
-    }));
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    document.querySelector('#file-tree > .tree-directory > .tree-children > .tree-file').click();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return {
-      root: document.getElementById('sidebar-root').textContent,
-      upHidden: document.getElementById('btn-tree-up').hidden,
-      active: (document.querySelector('.tree-file.active .tree-name') || {}).textContent || null
-    };
-  });
-  assert.equal(expandAndOpen.root, '子目录', JSON.stringify(expandAndOpen));
-  assert.equal(expandAndOpen.upHidden, false, JSON.stringify(expandAndOpen));
-  assert.equal(expandAndOpen.active, '嵌套.md', JSON.stringify(expandAndOpen));
-
-  const expandAndOpenReturned = await run(async () => {
-    document.getElementById('btn-tree-up').click();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    return {
-      root: document.getElementById('sidebar-root').textContent,
-      upHidden: document.getElementById('btn-tree-up').hidden
-    };
-  });
-  assert.equal(expandAndOpenReturned.root, path.basename(root), JSON.stringify(expandAndOpenReturned));
-  assert.equal(expandAndOpenReturned.upHidden, true, JSON.stringify(expandAndOpenReturned));
-
+  // 切换到大纲再切回：文件树恢复且大纲真正隐藏
   const outlineHidden = await run(async () => {
     window.editor.setMarkdown('# 大纲标题', false);
     document.getElementById('tab-outline').click();
     await new Promise((resolve) => setTimeout(resolve, 250));
     document.getElementById('tab-files').click();
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 200));
     const outline = document.getElementById('outline-panel');
     const files = document.getElementById('file-tree');
     return {
       outlineHidden: outline.hidden,
       outlineDisplay: getComputedStyle(outline).display,
-      outlineHeight: outline.getBoundingClientRect().height,
-      filesHidden: files.hidden
+      filesHidden: files.hidden,
+      root: document.getElementById('sidebar-root').title.split(String.fromCharCode(92)).join('/')
     };
   });
-  assert.deepEqual(outlineHidden, {
+  assert.deepEqual({
+    outlineHidden: outlineHidden.outlineHidden,
+    outlineDisplay: outlineHidden.outlineDisplay,
+    filesHidden: outlineHidden.filesHidden
+  }, {
     outlineHidden: true,
     outlineDisplay: 'none',
-    outlineHeight: 0,
     filesHidden: false
   }, JSON.stringify(outlineHidden));
+  assert.equal(outlineHidden.root, folder.replace(/\\/g, '/'), JSON.stringify(outlineHidden));
+
   assert.deepEqual(errors, []);
   clearTimeout(timeout);
-  console.log('Sidebar regression OK: directory navigation, up navigation, and outline hiding.');
+  console.log('Sidebar regression OK: tree rooted at parent of the document folder, row-click toggling, no trapped states.');
   app.exit(0);
 }).catch((error) => {
   clearTimeout(timeout);

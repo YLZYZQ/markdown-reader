@@ -271,7 +271,9 @@ function assertAuthorizedDocument(filePath) {
 function assertAuthorizedTreePath(filePath, context) {
   const normalized = normalizeFileSystemPath(filePath);
   const normalizedKey = pathKey(normalized);
-  const rootKey = context.documentPath ? path.dirname(pathKey(context.documentPath)) : null;
+  // 文件栏树根固定为“当前文档所在目录的上一级”，授权范围与之对齐：
+  // 渲染进程只能枚举该范围（含当前目录与兄弟目录）以内的路径。
+  const rootKey = context.documentPath ? path.dirname(path.dirname(pathKey(context.documentPath))) : null;
   if (rootKey && (normalizedKey === rootKey || normalizedKey.startsWith(`${rootKey}${path.sep}`))) {
     return normalized;
   }

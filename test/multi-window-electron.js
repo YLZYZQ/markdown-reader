@@ -82,15 +82,22 @@ app.whenReady().then(async () => {
     );
     const treeState = await first.webContents.executeJavaScript(`(async () => {
       const allowed = await window.api.listDirectoryForDocument(${JSON.stringify(folderA)});
-      const denied = await window.api.listDirectoryForDocument(${JSON.stringify(root)});
+      const parent = await window.api.listDirectoryForDocument(${JSON.stringify(root)});
+      const denied = await window.api.listDirectoryForDocument(${JSON.stringify(path.dirname(root))});
       return {
         allowedRoot: allowed.rootPath,
         allowedFiles: allowed.entries.filter((entry) => entry.type === 'file').map((entry) => entry.name),
+        parentRoot: parent.rootPath,
+        parentFolders: parent.entries.filter((entry) => entry.type === 'directory').map((entry) => entry.name),
         deniedError: denied.error || null
       };
     })()`);
     assert.equal(treeState.allowedRoot, folderA, JSON.stringify(treeState));
     assert.deepEqual(treeState.allowedFiles, ['A文档.md'], JSON.stringify(treeState));
+    // 新契约：文件栏树根=文档目录的上一级，父目录（含兄弟目录）在授权范围内。
+    assert.equal(treeState.parentRoot, root, JSON.stringify(treeState));
+    assert.ok(treeState.parentFolders.includes('A') && treeState.parentFolders.includes('B'), JSON.stringify(treeState));
+    // 授权范围之外的目录（上一级的上一级）仍然拒绝。
     assert.match(treeState.deniedError, /未授权的目录路径/, JSON.stringify(treeState));
 
     await launchSecondInstance(documentB);

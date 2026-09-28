@@ -23,7 +23,6 @@ const fileTreeEl = document.getElementById('file-tree');
 const sidebarRootEl = document.getElementById('sidebar-root');
 const sidebarButtonEl = document.getElementById('btn-sidebar');
 const sidebarRefreshButtonEl = document.getElementById('btn-sidebar-refresh');
-const sidebarUpButtonEl = document.getElementById('btn-tree-up');
 const tabFilesEl = document.getElementById('tab-files');
 const tabOutlineEl = document.getElementById('tab-outline');
 const outlinePanelEl = document.getElementById('outline-panel');
@@ -48,7 +47,6 @@ let currentFindMatch = -1;
 let lastFindSignature = '';
 let fileTreeRequestId = 0;
 let fileTreeRootPath = null;
-let fileTreeHomePath = null;
 let sidebarCollapsed = false;
 let pendingSystemDocumentPath = null;
 let autoSaveEnabled = false;
@@ -403,7 +401,6 @@ function applyLanguageChrome() {
     '#btn-sidebar': tr('toolbar.sidebarTitle'),
     '#btn-find': tr('toolbar.findTitle'),
     '#btn-reading-settings': tr('toolbar.readingSettingsTitle'),
-    '#btn-tree-up': tr('sidebar.upTitle'),
     '#btn-sidebar-refresh': tr('sidebar.refreshTitle'),
     '#reading-progress': tr('status.readingTitle'),
     '#cursor-pos': tr('status.cursorTitle'),
@@ -426,7 +423,6 @@ function applyLanguageChrome() {
     '#btn-theme': tr('toolbar.themeAria'),
     '#btn-reading-settings': tr('toolbar.readingSettingsAria'),
     '#file-sidebar': tr('sidebar.aria'),
-    '#btn-tree-up': tr('sidebar.upAria'),
     '#btn-sidebar-refresh': tr('sidebar.refreshAria'),
     '.sidebar-tabs': tr('sidebar.tabsAria'),
     '#file-tree': tr('sidebar.treeAria'),
@@ -632,8 +628,6 @@ function clearFileTree(key = 'sidebar.emptyTree', error = '') {
   sidebarRootEl.textContent = tr('sidebar.noDocument');
   sidebarRootEl.title = tr('sidebar.noDocument');
   fileTreeRootPath = null;
-  fileTreeHomePath = null;
-  sidebarUpButtonEl.hidden = true;
 }
 
 function treeEntryContainsPath(entry, targetPath) {
@@ -649,7 +643,7 @@ function createTreeEntry(entry, activePath) {
 
     const summary = document.createElement('summary');
     summary.dataset.path = entry.path;
-    summary.title = `${entry.path}\n${tr('sidebar.enterFolder')}`;
+    summary.title = `${entry.path}\n${tr('sidebar.toggleFolder')}`;
     const chevron = document.createElement('span');
     chevron.className = 'tree-chevron';
     chevron.textContent = '›';
@@ -662,11 +656,7 @@ function createTreeEntry(entry, activePath) {
     name.className = 'tree-name';
     name.textContent = entry.name;
     summary.append(chevron, icon, name);
-    summary.addEventListener('click', (event) => {
-      if (event.target.closest('.tree-chevron')) return;
-      event.preventDefault();
-      void navigateFileTree(entry.path);
-    });
+    // 单击文件夹行即展开/折叠（<details> 原生行为），不再有“进入目录”的导航状态。
     details.appendChild(summary);
 
     const children = document.createElement('div');
@@ -701,23 +691,12 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
     return;
   }
 
-  const keepCurrentRoot = !rootPath && fileTreeRootPath && pathContains(fileTreeRootPath, filePath);
-  // 树根跟随所打开文件所在目录：直接点击展开子文件夹里的文件时，
-  // 与“先进入子文件夹再打开”落到同一状态，返回箭头始终可用。
-  let requestPath = rootPath;
-  if (!requestPath) {
-    if (keepCurrentRoot) {
-      const fileDir = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
-      requestPath = comparablePath(fileDir) === comparablePath(fileTreeRootPath)
-        ? fileTreeRootPath
-        : fileDir;
-    } else {
-      requestPath = filePath;
-    }
-  }
-  if (!fileTreeHomePath || !pathContains(fileTreeHomePath, filePath)) {
-    fileTreeHomePath = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
-  }
+  // 树根固定为“当前文档所在目录的上一级”：无论从哪里打开文件，
+  // 文件栏始终同时显示当前目录与兄弟目录，不存在困在子文件夹里的状态。
+  // 文档位于盘符根目录时退回其所在目录。
+  const fileDir = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+  const parentDir = fileDir.replace(/\/[^/]+$/, '');
+  const requestPath = rootPath || (comparablePath(parentDir) !== comparablePath(fileDir) ? parentDir : fileDir);
   const requestId = ++fileTreeRequestId;
   sidebarRefreshButtonEl.classList.add('loading');
   try {
@@ -731,9 +710,6 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
     fileTreeRootPath = result.rootPath;
     sidebarRootEl.textContent = result.rootName;
     sidebarRootEl.title = result.rootPath;
-    sidebarUpButtonEl.hidden = !fileTreeHomePath ||
-      !pathContains(fileTreeHomePath, fileTreeRootPath) ||
-      comparablePath(fileTreeRootPath) === comparablePath(fileTreeHomePath);
     fileTreeEl.replaceChildren();
     const activePath = comparablePath(currentFilePath);
     result.entries.forEach((entry) => fileTreeEl.appendChild(createTreeEntry(entry, activePath)));
@@ -756,18 +732,6 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
   } finally {
     if (requestId === fileTreeRequestId) sidebarRefreshButtonEl.classList.remove('loading');
   }
-}
-
-function navigateFileTree(rootPath) {
-  if (!rootPath || rootPath === fileTreeRootPath) return Promise.resolve();
-  return refreshFileTree(currentFilePath, rootPath);
-}
-
-function goUpFileTree() {
-  if (!fileTreeRootPath || !fileTreeHomePath) return;
-  const parentPath = fileTreeRootPath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
-  if (!pathContains(fileTreeHomePath, parentPath)) return;
-  void refreshFileTree(currentFilePath, parentPath);
 }
 
 async function openDocumentFromSidebar(filePath) {
@@ -1484,7 +1448,6 @@ document.getElementById('btn-new').addEventListener('click', () => newDocument()
 document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
 sidebarButtonEl.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
-sidebarUpButtonEl.addEventListener('click', goUpFileTree);
 sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree(currentFilePath, fileTreeRootPath));
 tabFilesEl.addEventListener('click', () => setSidebarTab('files'));
 tabOutlineEl.addEventListener('click', () => setSidebarTab('outline'));
