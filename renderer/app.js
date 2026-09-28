@@ -702,7 +702,19 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
   }
 
   const keepCurrentRoot = !rootPath && fileTreeRootPath && pathContains(fileTreeRootPath, filePath);
-  const requestPath = rootPath || (keepCurrentRoot ? fileTreeRootPath : filePath);
+  // 树根跟随所打开文件所在目录：直接点击展开子文件夹里的文件时，
+  // 与“先进入子文件夹再打开”落到同一状态，返回箭头始终可用。
+  let requestPath = rootPath;
+  if (!requestPath) {
+    if (keepCurrentRoot) {
+      const fileDir = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+      requestPath = comparablePath(fileDir) === comparablePath(fileTreeRootPath)
+        ? fileTreeRootPath
+        : fileDir;
+    } else {
+      requestPath = filePath;
+    }
+  }
   if (!fileTreeHomePath || !pathContains(fileTreeHomePath, filePath)) {
     fileTreeHomePath = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
   }

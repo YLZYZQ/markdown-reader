@@ -123,6 +123,37 @@ app.whenReady().then(async () => {
   assert.equal(returned.upHidden, true, JSON.stringify(returned));
   assert.deepEqual(returned.files, ['当前.md'], JSON.stringify(returned));
 
+  // 展开子文件夹下拉后直接点击内部文件：树根应跟随文件所在目录，
+  // 返回箭头出现（与“先进入子文件夹再打开”结果一致）。
+  const expandAndOpen = await run(async () => {
+    document.querySelector('.tree-chevron').dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    document.querySelector('#file-tree > .tree-directory > .tree-children > .tree-file').click();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return {
+      root: document.getElementById('sidebar-root').textContent,
+      upHidden: document.getElementById('btn-tree-up').hidden,
+      active: (document.querySelector('.tree-file.active .tree-name') || {}).textContent || null
+    };
+  });
+  assert.equal(expandAndOpen.root, '子目录', JSON.stringify(expandAndOpen));
+  assert.equal(expandAndOpen.upHidden, false, JSON.stringify(expandAndOpen));
+  assert.equal(expandAndOpen.active, '嵌套.md', JSON.stringify(expandAndOpen));
+
+  const expandAndOpenReturned = await run(async () => {
+    document.getElementById('btn-tree-up').click();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return {
+      root: document.getElementById('sidebar-root').textContent,
+      upHidden: document.getElementById('btn-tree-up').hidden
+    };
+  });
+  assert.equal(expandAndOpenReturned.root, path.basename(root), JSON.stringify(expandAndOpenReturned));
+  assert.equal(expandAndOpenReturned.upHidden, true, JSON.stringify(expandAndOpenReturned));
+
   const outlineHidden = await run(async () => {
     window.editor.setMarkdown('# 大纲标题', false);
     document.getElementById('tab-outline').click();
