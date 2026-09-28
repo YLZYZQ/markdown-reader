@@ -23,6 +23,7 @@ const fileTreeEl = document.getElementById('file-tree');
 const sidebarRootEl = document.getElementById('sidebar-root');
 const sidebarButtonEl = document.getElementById('btn-sidebar');
 const sidebarRefreshButtonEl = document.getElementById('btn-sidebar-refresh');
+const sidebarUpButtonEl = document.getElementById('btn-tree-up');
 const tabFilesEl = document.getElementById('tab-files');
 const tabOutlineEl = document.getElementById('tab-outline');
 const outlinePanelEl = document.getElementById('outline-panel');
@@ -401,6 +402,7 @@ function applyLanguageChrome() {
     '#btn-sidebar': tr('toolbar.sidebarTitle'),
     '#btn-find': tr('toolbar.findTitle'),
     '#btn-reading-settings': tr('toolbar.readingSettingsTitle'),
+    '#btn-tree-up': tr('sidebar.upTitle'),
     '#btn-sidebar-refresh': tr('sidebar.refreshTitle'),
     '#reading-progress': tr('status.readingTitle'),
     '#cursor-pos': tr('status.cursorTitle'),
@@ -423,6 +425,7 @@ function applyLanguageChrome() {
     '#btn-theme': tr('toolbar.themeAria'),
     '#btn-reading-settings': tr('toolbar.readingSettingsAria'),
     '#file-sidebar': tr('sidebar.aria'),
+    '#btn-tree-up': tr('sidebar.upAria'),
     '#btn-sidebar-refresh': tr('sidebar.refreshAria'),
     '.sidebar-tabs': tr('sidebar.tabsAria'),
     '#file-tree': tr('sidebar.treeAria'),
@@ -628,6 +631,7 @@ function clearFileTree(key = 'sidebar.emptyTree', error = '') {
   sidebarRootEl.textContent = tr('sidebar.noDocument');
   sidebarRootEl.title = tr('sidebar.noDocument');
   fileTreeRootPath = null;
+  sidebarUpButtonEl.hidden = true;
 }
 
 function treeEntryContainsPath(entry, targetPath) {
@@ -643,7 +647,7 @@ function createTreeEntry(entry, activePath) {
 
     const summary = document.createElement('summary');
     summary.dataset.path = entry.path;
-    summary.title = `${entry.path}\n${tr('sidebar.toggleFolder')}`;
+    summary.title = `${entry.path}\n${tr('sidebar.enterFolder')}`;
     const chevron = document.createElement('span');
     chevron.className = 'tree-chevron';
     chevron.textContent = '›';
@@ -656,7 +660,11 @@ function createTreeEntry(entry, activePath) {
     name.className = 'tree-name';
     name.textContent = entry.name;
     summary.append(chevron, icon, name);
-    // 单击文件夹行即展开/折叠（<details> 原生行为），不再有“进入目录”的导航状态。
+    summary.addEventListener('click', (event) => {
+      if (event.target.closest('.tree-chevron')) return;
+      event.preventDefault();
+      void navigateFileTree(entry.path);
+    });
     details.appendChild(summary);
 
     const children = document.createElement('div');
@@ -691,12 +699,21 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
     return;
   }
 
-  // 树根固定为“当前文档所在目录的上一级”：无论从哪里打开文件，
-  // 文件栏始终同时显示当前目录与兄弟目录，不存在困在子文件夹里的状态。
-  // 文档位于盘符根目录时退回其所在目录。
-  const fileDir = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
-  const parentDir = fileDir.replace(/\/[^/]+$/, '');
-  const requestPath = rootPath || (comparablePath(parentDir) !== comparablePath(fileDir) ? parentDir : fileDir);
+  // 树根规则（保证任何状态都有向上的出口）：
+  // - 显式 rootPath（进入文件夹 / 返回上一级）直接使用；
+  // - 打开的文件在当前树根之内 → 保持当前树根，浏览时地面不晃动；
+  // - 文件在当前树根之外打开（对话框/系统关联）→ 锚定为文件所在目录的上一级，
+  //   当前目录与兄弟目录同屏可见；文档位于盘符根目录时退回其所在目录。
+  let requestPath = rootPath;
+  if (!requestPath) {
+    const fileDir = filePath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+    if (fileTreeRootPath && pathContains(fileTreeRootPath, filePath)) {
+      requestPath = fileTreeRootPath;
+    } else {
+      const parentDir = fileDir.replace(/\/[^/]+$/, '');
+      requestPath = comparablePath(parentDir) !== comparablePath(fileDir) ? parentDir : fileDir;
+    }
+  }
   const requestId = ++fileTreeRequestId;
   sidebarRefreshButtonEl.classList.add('loading');
   try {
@@ -710,6 +727,9 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
     fileTreeRootPath = result.rootPath;
     sidebarRootEl.textContent = result.rootName;
     sidebarRootEl.title = result.rootPath;
+    // 返回箭头：只要当前树根还有上一级就可返回，逐级回退直至盘符根目录。
+    const rootParent = fileTreeRootPath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+    sidebarUpButtonEl.hidden = comparablePath(rootParent) === comparablePath(fileTreeRootPath);
     fileTreeEl.replaceChildren();
     const activePath = comparablePath(currentFilePath);
     result.entries.forEach((entry) => fileTreeEl.appendChild(createTreeEntry(entry, activePath)));
@@ -732,6 +752,19 @@ async function refreshFileTree(filePath = currentFilePath, rootPath = null) {
   } finally {
     if (requestId === fileTreeRequestId) sidebarRefreshButtonEl.classList.remove('loading');
   }
+}
+
+function navigateFileTree(rootPath) {
+  if (!rootPath || rootPath === fileTreeRootPath) return Promise.resolve();
+  return refreshFileTree(currentFilePath, rootPath);
+}
+
+// 返回上一级：无固定锚点上限，可从任何深度逐级回退到盘符根目录。
+function goUpFileTree() {
+  if (!fileTreeRootPath) return;
+  const parentPath = fileTreeRootPath.replace(/\\/g, '/').replace(/\/[^/]+$/, '');
+  if (comparablePath(parentPath) === comparablePath(fileTreeRootPath)) return;
+  void refreshFileTree(currentFilePath, parentPath);
 }
 
 async function openDocumentFromSidebar(filePath) {
@@ -1449,6 +1482,7 @@ document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
 sidebarButtonEl.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
 sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree(currentFilePath, fileTreeRootPath));
+sidebarUpButtonEl.addEventListener('click', goUpFileTree);
 tabFilesEl.addEventListener('click', () => setSidebarTab('files'));
 tabOutlineEl.addEventListener('click', () => setSidebarTab('outline'));
 document.getElementById('btn-find').addEventListener('click', () => showFindPanel(false));

@@ -271,11 +271,20 @@ function assertAuthorizedDocument(filePath) {
 function assertAuthorizedTreePath(filePath, context) {
   const normalized = normalizeFileSystemPath(filePath);
   const normalizedKey = pathKey(normalized);
-  // 文件栏树根固定为“当前文档所在目录的上一级”，授权范围与之对齐：
-  // 渲染进程只能枚举该范围（含当前目录与兄弟目录）以内的路径。
-  const rootKey = context.documentPath ? path.dirname(path.dirname(pathKey(context.documentPath))) : null;
-  if (rootKey && (normalizedKey === rootKey || normalizedKey.startsWith(`${rootKey}${path.sep}`))) {
-    return normalized;
+  // 文件栏允许进入文件夹与逐级返回：授权范围覆盖当前文档目录的每一级祖先
+  // 及其子树（即同盘符内的浏览路径），未打开文档的窗口不可列目录。
+  if (context.documentPath) {
+    let scope = path.dirname(pathKey(context.documentPath));
+    for (;;) {
+      // 盘符根（如 C:\）自带结尾分隔符，再拼 path.sep 会产生双斜杠导致前缀匹配失败。
+      const prefix = scope.endsWith(path.sep) ? scope : `${scope}${path.sep}`;
+      if (normalizedKey === scope || normalizedKey.startsWith(prefix)) {
+        return normalized;
+      }
+      const parent = path.dirname(scope);
+      if (parent === scope) break;
+      scope = parent;
+    }
   }
   throw new Error(appI18n.t(preferences.menuLanguage, 'errors.unauthorizedDirectory'));
 }
