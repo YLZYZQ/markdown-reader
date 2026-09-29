@@ -463,11 +463,13 @@ body {
 .toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block .mermaid-wysiwyg-preview {
   position: relative;
   min-height: 80px;
+  /* 图按自然尺寸渲染：宽图在容器内横向滚动，文字保持原始字号。 */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .toastui-editor-ww-code-block-highlighting.mermaid-wysiwyg-code-block .mermaid-wysiwyg-preview svg {
   display: block;
-  width: 100%;
   height: auto;
   max-width: none;
 }
