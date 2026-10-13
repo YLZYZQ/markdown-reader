@@ -586,7 +586,11 @@ ipcMain.handle('directory:listForDocument', async (event, filePath) => {
   try {
     const treePath = assertAuthorizedTreePath(filePath, context);
     const stats = await fsp.stat(treePath);
-    return stats.isDirectory() ? listDirectoryTree(treePath) : listDocumentTree(treePath);
+    // priorityPath：当前文档路径。父目录很大被截断时，文档所在子树优先保留，
+    // 保证侧栏始终能看到与文档同目录的文件。
+    return stats.isDirectory()
+      ? listDirectoryTree(treePath, { priorityPath: context.documentPath })
+      : listDocumentTree(treePath);
   } catch (error) {
     return errorResult(error);
   }

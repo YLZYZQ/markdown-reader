@@ -78,3 +78,52 @@ test('document tree reports when its entry budget is exceeded', async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('huge sibling subtree cannot starve the document directory (priorityPath)', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'md-reader-prio-'));
+  try {
+    const bigSibling = path.join(root, 'aaa-big');
+    await fs.mkdir(bigSibling);
+    // 字母序在前、体量超配额的兄弟目录（120 个文件，配额 100）。
+    await Promise.all(Array.from({ length: 120 }, (_, i) =>
+      fs.writeFile(path.join(bigSibling, `f${String(i).padStart(4, '0')}.md`), '')));
+    const docDir = path.join(root, 'zzz-doc');
+    await fs.mkdir(docDir);
+    await Promise.all([
+      fs.writeFile(path.join(docDir, '目标文档.md'), ''),
+      fs.writeFile(path.join(docDir, '同目录其他文件.md'), ''),
+    ]);
+
+    const result = await listDirectoryTree(root, {
+      maxEntries: 100,
+      priorityPath: path.join(docDir, '目标文档.md'),
+    });
+    assert.equal(result.truncated, true, JSON.stringify(result));
+    const docEntry = result.entries.find((entry) => entry.name === 'zzz-doc');
+    assert.ok(docEntry, '文档所在目录必须保留');
+    assert.deepEqual(docEntry.children.map((child) => child.name).sort(),
+      ['同目录其他文件.md', '目标文档.md'], JSON.stringify(result));
+    // 输出顺序保持目录优先 + 字母序。
+    assert.deepEqual(result.entries.map((entry) => entry.name), ['aaa-big', 'zzz-doc']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('priorityPath file at root survives entry-cap truncation', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'md-reader-prio-file-'));
+  try {
+    await Promise.all(Array.from({ length: 150 }, (_, i) =>
+      fs.writeFile(path.join(root, `a${String(i).padStart(4, '0')}.md`), '')));
+    await fs.writeFile(path.join(root, 'z目标.md'), '');
+    const result = await listDirectoryTree(root, {
+      maxEntries: 100,
+      priorityPath: path.join(root, 'z目标.md'),
+    });
+    assert.equal(result.truncated, true);
+    assert.ok(result.entries.some((entry) => entry.name === 'z目标.md'),
+      '根层的当前文档必须可见');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
