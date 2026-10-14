@@ -586,6 +586,9 @@ body.theme-light .toastui-editor-main .ProseMirror {
 .toastui-editor-ww-container .toastui-editor-contents li { margin: 0.28em 0; padding-left: 0.25em; }
 .toastui-editor-ww-container .toastui-editor-contents li > p { margin: 0.3em 0; }
 .toastui-editor-ww-container .toastui-editor-contents li::marker { color: var(--accent); }
+/* 任务列表项沿用 TUI 的 24px 缩进几何：复选框 ::before 绝对定位在 left:0，
+   若被上面的 li 覆盖压小缩进，18px 复选框会盖住每项首字符 */
+.toastui-editor-ww-container .toastui-editor-contents li.task-list-item { padding-left: 24px; margin-left: -24px; }
 /* 行内代码：弱化为中性底色，消除大段技术文档里的彩色噪音 */
 .toastui-editor-contents code {
   color: inherit;

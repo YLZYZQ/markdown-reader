@@ -18,6 +18,7 @@
     "dist:portable": "node scripts/build-windows-portable.js",
     "dist:dir": "electron-builder --win --dir",
     "test:reading": "electron test/reading-electron.js",
+    "test:tasklist": "electron test/tasklist-electron.js",
     "test:search": "electron test/search-electron.js",
     "test:link": "electron test/link-electron.js",
     "test:close": "electron test/close-electron.js",

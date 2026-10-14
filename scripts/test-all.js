@@ -10,6 +10,7 @@ const ELECTRON_TESTS = Object.freeze([
   'test/smoke-electron.js',
   'test/print-pipeline.electron.js',
   'test/reading-electron.js',
+  'test/tasklist-electron.js',
   'test/search-electron.js',
   'test/link-electron.js',
   'test/close-electron.js',
