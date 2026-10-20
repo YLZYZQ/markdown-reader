@@ -1651,7 +1651,7 @@ function contextMenuItems() {
       { label: tr('context.bulletList'), action: () => editor.exec('bulletList') },
       { label: tr('context.orderedList'), action: () => editor.exec('orderedList') },
       { label: tr('context.taskList'), action: () => editor.exec('taskList') },
-      { label: tr('context.codeBlock'), action: () => editor.exec('codeBlock') },
+      { label: tr('context.codeBlock'), action: () => toggleCodeBlock() },
     ]
   },
   {
@@ -1672,7 +1672,7 @@ function contextMenuItems() {
       { label: tr('context.image'), action: () => openToolbarPopup('image') },
       { label: tr('context.link'), hotkey: 'Ctrl+K', action: () => openToolbarPopup('link') },
       { label: tr('context.table'), action: () => openToolbarPopup('table') },
-      { label: tr('context.codeBlock'), action: () => editor.exec('codeBlock') },
+      { label: tr('context.codeBlock'), action: () => toggleCodeBlock() },
       { label: tr('context.horizontalRule'), action: () => editor.exec('hr') },
       { label: tr('context.dateTime'), action: () => editor.insertText('\n' + nowString() + '\n') },
     ]
@@ -1690,6 +1690,124 @@ function nowString() {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+// ============ 代码块开关（插入 ⇄ 取消）============
+// Toast UI 的 codeBlock 命令只会插入/包裹，块内再次执行无效果，用户
+// 没有"取消代码块"的入口。这里把工具栏按钮与右键菜单变成开关：光标
+// 在代码块内时转为普通段落（内容保留、单步可撤销）；Esc 把光标移到
+// 块后（文末自动补一段），避免"被困"在块里。
+function wwCodeBlockAtSelection() {
+  if (!editor || currentEditMode !== 'wysiwyg') return null;
+  try {
+    const view = editor.getCurrentModeEditor().view;
+    const { $from } = view.state.selection;
+    for (let depth = $from.depth; depth >= 1; depth -= 1) {
+      const node = $from.node(depth);
+      if (node.type.name === 'codeBlock') {
+        return { view, node, before: $from.before(depth), after: $from.after(depth) };
+      }
+    }
+  } catch (_) { /* 视图不可用 */ }
+  return null;
+}
+
+function wwCodeBlockToParagraphs({ view, node, before }) {
+  const schema = view.state.schema;
+  // 空行丢弃：取消代码块后连续非空行各成一段；全空则给一个空段。
+  let lines = node.textContent.split('\n').filter((line) => line.trim() !== '');
+  if (!lines.length) lines = [''];
+  const paras = lines.map((line) => schema.nodes.paragraph.createAndFill(
+    null, line ? [schema.text(line)] : null));
+  const TextSelectionClass = Object.getPrototypeOf(view.state.selection).constructor;
+  const tr = view.state.tr.replaceWith(before, before + node.nodeSize, paras);
+  tr.setSelection(TextSelectionClass.create(tr.doc, Math.min(before + 1, tr.doc.content.size)));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+}
+
+// 源码模式：定位光标所在的围栏代码块（开栏行、闭栏行，0 基）。
+function mdFindCodeBlockRange() {
+  try {
+    const selection = editor.getSelection();
+    const head = Array.isArray(selection[0]) ? selection[0][0] : selection[0];
+    const caretLine = head - 1;
+    const lines = editor.getMarkdown().split('\n');
+    const fence = /^\s*(```|~~~)/;
+    // 向上找最近围栏行；按文档序计数判定它开栏（奇数）还是闭栏。
+    let open = -1;
+    for (let i = Math.min(caretLine, lines.length - 1); i >= 0; i -= 1) {
+      if (!fence.test(lines[i])) continue;
+      let fenceCount = 0;
+      for (let j = 0; j <= i; j += 1) if (fence.test(lines[j])) fenceCount += 1;
+      if (fenceCount % 2 === 1) { open = i; break; }
+    }
+    if (open < 0) return null;
+    for (let i = open + 1; i < lines.length; i += 1) {
+      if (fence.test(lines[i])) return { lines, open, close: i };
+    }
+  } catch (_) { /* 视图不可用 */ }
+  return null;
+}
+
+function mdUnwrapCodeBlock() {
+  const found = mdFindCodeBlockRange();
+  if (!found) return false;
+  const { lines, open, close } = found;
+  const inner = lines.slice(open + 1, close).join('\n');
+  if (close + 1 < lines.length) {
+    // 连同闭栏行尾换行一起选掉，替换为内容+换行，避免与下一行粘连
+    editor.setSelection([open + 1, 1], [close + 2, 1]);
+    editor.replaceSelection(inner ? `${inner}\n` : '');
+  } else {
+    editor.setSelection([open + 1, 1], [close + 1, lines[close].length + 1]);
+    editor.replaceSelection(inner);
+  }
+  return true;
+}
+
+function caretInsideCodeBlock() {
+  if (currentEditMode === 'wysiwyg') return Boolean(wwCodeBlockAtSelection());
+  return Boolean(mdFindCodeBlockRange());
+}
+
+function toggleCodeBlock() {
+  if (currentEditMode === 'wysiwyg') {
+    const hit = wwCodeBlockAtSelection();
+    if (hit) { wwCodeBlockToParagraphs(hit); return; }
+  } else if (mdUnwrapCodeBlock()) {
+    return;
+  }
+  editor.exec('codeBlock');
+}
+
+// 工具栏"代码块"按钮：块内点击时在捕获阶段接管，变成"取消"。
+document.addEventListener('click', (event) => {
+  const button = event.target && event.target.closest && event.target.closest('.toastui-editor-toolbar-icons.codeblock');
+  if (!button || !caretInsideCodeBlock()) return;
+  event.preventDefault();
+  event.stopPropagation();
+  toggleCodeBlock();
+}, true);
+
+// Esc：从代码块里跳出（光标移到块后；文末自动补一个空段）。
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || document.body.classList.contains('focus-mode')) return;
+  if (!document.getElementById('reading-settings').hidden || !findPanelEl.hidden) return;
+  const hit = wwCodeBlockAtSelection();
+  if (!hit) return;
+  event.preventDefault();
+  const { view, after } = hit;
+  const SelectionClass = Object.getPrototypeOf(view.state.selection.constructor);
+  const tr = view.state.tr;
+  let end = after;
+  if (end >= tr.doc.content.size) {
+    tr.insert(end, view.state.schema.nodes.paragraph.createAndFill());
+    end += 1;
+  }
+  tr.setSelection(SelectionClass.near(tr.doc.resolve(Math.min(end + 1, tr.doc.content.size)), 1));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+}, true);
 
 // Toast UI 的图片、链接和表格不是无参命令，而是工具栏弹窗。
 // 延迟到当前 mousedown 完成后再点击，否则其全局监听器会立刻关闭刚打开的弹窗。

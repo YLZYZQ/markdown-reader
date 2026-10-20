@@ -19,6 +19,7 @@
     "dist:dir": "electron-builder --win --dir",
     "test:reading": "electron test/reading-electron.js",
     "test:tasklist": "electron test/tasklist-electron.js",
+    "test:codeblock": "electron test/codeblock-electron.js",
     "test:search": "electron test/search-electron.js",
     "test:link": "electron test/link-electron.js",
     "test:close": "electron test/close-electron.js",
