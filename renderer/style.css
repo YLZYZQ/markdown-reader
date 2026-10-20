@@ -380,10 +380,20 @@ body {
   font-weight: 600;
 }
 .outline-text {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* 小节折叠箭头：所有行保留固定箭头槽，叶子行留空保证文本对齐 */
+.outline-fold {
+  flex: 0 0 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.outline-fold:not(:empty) { cursor: pointer; }
+.outline-item:hover .outline-fold:not(:empty) { color: var(--fg); }
 .outline-level {
   flex: 0 0 auto;
   color: var(--muted);

@@ -4,7 +4,9 @@
 // - 从树根之外打开文件 → 树根锚定为文件所在目录的上一级；
 // - 打开树根之内的文件 → 树根保持不变（浏览时地面不晃动）；
 // - 点击文件夹行进入子目录，返回箭头始终可用且可逐级回退到盘符根；
-// - 文件页签切回后大纲面板必须真正隐藏。
+// - 文件页签切回后大纲面板必须真正隐藏；
+// - 侧栏头部 « 按钮可折叠整栏，☰ 恢复后目录树原样保留；
+// - 大纲小节可折叠：▸ 收起子标题、▾ 展开，折叠跨重建保持。
 
 const { app, BrowserWindow, ipcMain } = require('electron');
 const assert = require('node:assert/strict');
@@ -182,9 +184,79 @@ app.whenReady().then(async () => {
     root: norm(base2)
   }, JSON.stringify(outlineHidden));
 
+  // 7) 侧栏折叠：« 收起整栏（inert 防误触），☰ 恢复后树原样
+  const collapsed = await run(async () => {
+    document.getElementById('btn-sidebar-collapse').click();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const workspaceEl = document.getElementById('workspace');
+    const aside = document.getElementById('file-sidebar');
+    const collapsedState = {
+      cls: workspaceEl.className,
+      inert: Boolean(aside.inert),
+      ariaExpanded: document.getElementById('btn-sidebar').getAttribute('aria-expanded')
+    };
+    document.getElementById('btn-sidebar').click();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return {
+      ...collapsedState,
+      restoredCls: workspaceEl.className,
+      restoredInert: Boolean(aside.inert),
+      rootAfterRestore: document.getElementById('sidebar-root').title.split(String.fromCharCode(92)).join('/')
+    };
+  });
+  assert.ok(/sidebar-collapsed/.test(collapsed.cls), JSON.stringify(collapsed));
+  assert.equal(collapsed.inert, true, JSON.stringify(collapsed));
+  assert.equal(collapsed.ariaExpanded, 'false', JSON.stringify(collapsed));
+  assert.ok(!/sidebar-collapsed/.test(collapsed.restoredCls), JSON.stringify(collapsed));
+  assert.equal(collapsed.restoredInert, false, JSON.stringify(collapsed));
+  assert.equal(collapsed.rootAfterRestore, norm(base2), JSON.stringify(collapsed));
+
+  // 8) 大纲小节折叠：H1 含 H2/H3 子级；▸ 收起后仅剩 H1，▾ 展开恢复；
+  //    编辑触发重建后折叠状态保持。
+  const outlineFold = await run(async () => {
+    window.editor.setMarkdown('# 总览\n\n正文。\n\n## 甲\n\n甲文。\n\n### 甲一\n\n深。\n\n## 乙\n\n乙文。', false);
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    document.getElementById('tab-outline').click();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const texts = () => [...document.querySelectorAll('#outline-list .outline-item')]
+      .map((el) => ({ text: el.querySelector('.outline-text').textContent, hidden: el.hidden }));
+    const before = texts();
+    // 收起「总览」(H1)：甲、甲一、乙 应隐藏
+    const h1Fold = document.querySelector('#outline-list .outline-item .outline-fold');
+    h1Fold.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const afterFold = texts();
+    // 编辑触发重建（折叠按 标题+层级 记忆）
+    window.editor.setMarkdown('# 总览\n\n新增正文。\n\n## 甲\n\n甲文。\n\n### 甲一\n\n深。\n\n## 乙\n\n乙文。', false);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const afterRebuild = texts();
+    // 展开「总览」恢复全部
+    const h1FoldAgain = document.querySelector('#outline-list .outline-item .outline-fold');
+    h1FoldAgain.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const afterUnfold = texts();
+    // 再收起二级「甲」，只藏 甲一
+    const folds = [...document.querySelectorAll('#outline-list .outline-item .outline-fold:not(:empty)')];
+    folds[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const afterFoldNested = texts();
+    return { before, afterFold, afterRebuild, afterUnfold, afterFoldNested };
+  });
+  assert.deepEqual(outlineFold.before.map((row) => row.text), ['总览', '甲', '甲一', '乙'],
+    JSON.stringify(outlineFold.before));
+  assert.deepEqual(outlineFold.afterFold.map((row) => row.hidden), [false, true, true, true],
+    JSON.stringify(outlineFold.afterFold));
+  assert.equal(outlineFold.afterFold[0].hidden, false, JSON.stringify(outlineFold.afterFold));
+  assert.deepEqual(outlineFold.afterRebuild.map((row) => row.hidden), [false, true, true, true],
+    `fold state must survive outline rebuild: ${JSON.stringify(outlineFold.afterRebuild)}`);
+  assert.deepEqual(outlineFold.afterUnfold.map((row) => row.hidden), [false, false, false, false],
+    JSON.stringify(outlineFold.afterUnfold));
+  assert.deepEqual(outlineFold.afterFoldNested.map((row) => row.hidden), [false, false, true, false],
+    JSON.stringify(outlineFold.afterFoldNested));
+
   assert.deepEqual(errors, []);
   clearTimeout(timeout);
-  console.log('Sidebar regression OK: parent anchoring, stable in-root browsing, enter/up navigation without ceilings.');
+  console.log('Sidebar regression OK: parent anchoring, stable in-root browsing, enter/up navigation without ceilings, panel collapse, outline section folding.');
   app.exit(0);
 }).catch((error) => {
   clearTimeout(timeout);

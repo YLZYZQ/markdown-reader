@@ -404,6 +404,7 @@ function applyLanguageChrome() {
     '#btn-reading-settings': tr('toolbar.readingSettingsTitle'),
     '#btn-tree-up': tr('sidebar.upTitle'),
     '#btn-sidebar-refresh': tr('sidebar.refreshTitle'),
+    '#btn-sidebar-collapse': tr('sidebar.collapseTitle'),
     '#reading-progress': tr('status.readingTitle'),
     '#cursor-pos': tr('status.cursorTitle'),
     '#reading-time': tr('status.readingTimeTitle'),
@@ -427,6 +428,7 @@ function applyLanguageChrome() {
     '#file-sidebar': tr('sidebar.aria'),
     '#btn-tree-up': tr('sidebar.upAria'),
     '#btn-sidebar-refresh': tr('sidebar.refreshAria'),
+    '#btn-sidebar-collapse': tr('sidebar.collapseAria'),
     '.sidebar-tabs': tr('sidebar.tabsAria'),
     '#file-tree': tr('sidebar.treeAria'),
     '#outline-panel': tr('sidebar.outlineAria'),
@@ -796,6 +798,10 @@ function scheduleOutlineRefresh() {
   }, 300);
 }
 
+// 大纲小节折叠状态：按「层级+标题文本」记忆，重建列表（编辑/滚动）后仍保持。
+const outlineCollapsedKeys = new Set();
+const outlineKey = (entry) => `${entry.level}\u0000${entry.text}`;
+
 function rebuildOutline() {
   if (!editor) return;
   const listScrollTop = outlineListEl.scrollTop;
@@ -808,20 +814,44 @@ function rebuildOutline() {
     outlineListEl.appendChild(empty);
     return;
   }
+  // 是否有子标题：紧随其后的标题层级是否更深。
+  const hasChildren = outlineEntries.map((entry, index) =>
+    Boolean(outlineEntries[index + 1] && outlineEntries[index + 1].level > entry.level));
+  // 栈维护"当前展开路径"；子标题隐藏当且仅当任一祖先处于折叠态。
+  const ancestors = [];
   outlineEntries.forEach((entry, index) => {
+    while (ancestors.length && ancestors[ancestors.length - 1].level >= entry.level) ancestors.pop();
+    const hidden = ancestors.some((item) => item.collapsed);
+    const key = outlineKey(entry);
+    const collapsed = hasChildren[index] && outlineCollapsedKeys.has(key);
+    if (!hidden && hasChildren[index]) ancestors.push({ level: entry.level, collapsed });
+
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'outline-item';
     button.style.paddingLeft = `${8 + (entry.level - 1) * 12}px`;
     button.title = entry.text;
     button.dataset.index = String(index);
+    button.hidden = hidden;
+    const fold = document.createElement('span');
+    fold.className = 'outline-fold';
+    if (hasChildren[index]) {
+      fold.textContent = collapsed ? '▸' : '▾';
+      fold.title = tr(collapsed ? 'sidebar.unfoldSection' : 'sidebar.foldSection');
+      fold.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (outlineCollapsedKeys.has(key)) outlineCollapsedKeys.delete(key);
+        else outlineCollapsedKeys.add(key);
+        rebuildOutline();
+      });
+    }
     const label = document.createElement('span');
     label.className = 'outline-text';
     label.textContent = entry.text;
     const level = document.createElement('span');
     level.className = 'outline-level';
     level.textContent = `H${entry.level}`;
-    button.append(label, level);
+    button.append(fold, label, level);
     button.addEventListener('click', () => jumpToHeading(index));
     outlineListEl.appendChild(button);
   });
@@ -898,7 +928,7 @@ function updateOutlineActive() {
   outlineListEl.querySelectorAll('.outline-item.active').forEach((el) => el.classList.remove('active'));
   if (activeIndex >= 0 && activeIndex < outlineEntries.length) {
     const item = outlineListEl.querySelector(`.outline-item[data-index="${activeIndex}"]`);
-    if (item) {
+    if (item && !item.hidden) {
       item.classList.add('active');
       const itemRect = item.getBoundingClientRect();
       const listRect = outlineListEl.getBoundingClientRect();
@@ -1481,6 +1511,7 @@ document.getElementById('btn-new').addEventListener('click', () => newDocument()
 document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-save').addEventListener('click', () => saveFile(false));
 sidebarButtonEl.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
+document.getElementById('btn-sidebar-collapse').addEventListener('click', () => setSidebarCollapsed(true));
 sidebarRefreshButtonEl.addEventListener('click', () => void refreshFileTree(currentFilePath, fileTreeRootPath));
 sidebarUpButtonEl.addEventListener('click', goUpFileTree);
 tabFilesEl.addEventListener('click', () => setSidebarTab('files'));
